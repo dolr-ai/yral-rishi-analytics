@@ -22,10 +22,10 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Phase A — Foundation + first signal
 | Item | Status |
 |---|---|
-| `db/analytics_sessions.sql` — sessionization materialized view DDL | 🔄 In PR (authored, NOT executed — gated on DB role/schema) |
+| `db/analytics_sessions.sql` — sessionization materialized view DDL | 🔄 In PR (authored + locally validated on PG16 synthetic data; NOT executed against any product DB) |
+| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | 🔄 In PR (authored + validated; SELECT-only against the view) |
+| Headline route (3 numbers, behind temporary shared-secret token) | 🔄 In PR (authored; `/headline?token=…`, plain tiles, retired in Phase B) |
 | Hourly refresh loop (mirrors `_trending_stats_refresher`) | ⏳ Pending (blocked on refresh-connection question below) |
-| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | ⏳ Pending |
-| Headline route (3 numbers, behind temporary shared-secret token) | ⏳ Pending |
 
 > **OPEN QUESTION for Rishi (blocks the refresh loop, not the DDL):** a
 > materialized-view REFRESH is physically a *write*, and writes only land on

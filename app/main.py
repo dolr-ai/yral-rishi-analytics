@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 import config
 import database
+from routes.headline import router as headline_router
 from routes.health import router as health_router
 
 logging.basicConfig(
@@ -46,3 +47,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(headline_router)

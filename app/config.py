@@ -56,6 +56,12 @@ ENGAGED_MIN_USER_MSGS = _env_int("ENGAGED_MIN_USER_MSGS", 4)
 # about small-sample uncertainty is a first-class feature, not a footnote.
 SMALL_SAMPLE_THRESHOLD = _env_int("SMALL_SAMPLE_THRESHOLD", 30)
 
+# Temporary shared-secret token gating the headline route so Rishi can see
+# first signal BEFORE Google login (Phase B) is wired. Set via Swarm secret /
+# env; empty by default so the route denies everyone until a token exists.
+# RETIRED in Phase B (PR B2) once real auth lands — it is not real auth.
+HEADLINE_TOKEN = _env("HEADLINE_TOKEN")
+
 # Google Workspace OAuth — restricts login to @gobazzinga.io. The client ID +
 # secret are created by Rishi in Google Cloud Console at Phase B and injected
 # via Swarm secrets; these are placeholders so the module imports cleanly
