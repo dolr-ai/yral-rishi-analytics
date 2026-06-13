@@ -14,6 +14,14 @@
 -- Connect to the `yral_agent_db` database before running (the grants apply
 -- within that DB's connection; this script intentionally carries no \connect
 -- line so the operator chooses the target explicitly).
+--
+-- PASSWORDS: run this script as-is (placeholder passwords), then immediately,
+-- in the same psql session, set the real ones —
+--     ALTER ROLE analytics_ro PASSWORD '<real-ro>';
+--     ALTER ROLE analytics_rw PASSWORD '<real-rw>';
+-- and store the full DSNs in Swarm secrets analytics_db_dsn / analytics_db_dsn_rw.
+-- Prefer ALTER ROLE-after over sed-substituting this file so a real password
+-- never lands on disk or in shell history. See docs/RUNBOOK.md §1.
 
 -- 1. The read-only role the analytics service logs in as.
 --    Password is a PLACEHOLDER — replace at run time with a real secret and
