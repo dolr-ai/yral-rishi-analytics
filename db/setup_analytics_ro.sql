@@ -46,7 +46,35 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO analytics_ro;
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
     GRANT SELECT ON TABLES TO analytics_ro;
 
--- Deliberately NOT granted: any write or DDL on `public`; CREATEDB; CREATEROLE;
--- SUPERUSER; access to other schemas (langfuse, etc.). If a future analytics
--- view needs llm_costs / coach_messages, those are in `public` and already
--- covered by the SELECT grant above.
+-- ── analytics_rw — the write-only leader role (refresh job ONLY) ──────────
+-- The hourly refresh reads the heavy 3.4M-row aggregation on the REPLICA via
+-- analytics_ro, then writes the small finished result to analytics.* on the
+-- LEADER via this role. It has ZERO access to `public` (the heavy read never
+-- runs as analytics_rw) — its only reach into the cluster is writing our own
+-- analytics schema. Decided by Rishi 2026-06-13 (replica-crunch, leader-write).
+
+-- 7. The role. Password is a PLACEHOLDER — real secret goes to Swarm
+--    (analytics_db_dsn_rw), never git. NOT read-only (it must write).
+CREATE ROLE analytics_rw LOGIN PASSWORD 'REPLACE_ME_VIA_SWARM_SECRET';
+
+-- 8. A 60s ceiling — generous enough for the hourly DELETE+COPY of the
+--    finished summary, still a hard backstop against a runaway write.
+ALTER ROLE analytics_rw SET statement_timeout = '60s';
+
+-- 9. Write within the analytics schema only. CREATE lets the service create
+--    its own derived tables (e.g. analytics_sessions) on first refresh.
+GRANT USAGE, CREATE ON SCHEMA analytics TO analytics_rw;
+GRANT INSERT, UPDATE, DELETE, TRUNCATE, SELECT
+    ON ALL TABLES IN SCHEMA analytics TO analytics_rw;
+
+-- 10. Tables analytics_rw creates in the analytics schema become readable by
+--     analytics_ro automatically — that's how the dashboard (read replica)
+--     sees the refreshed summary.
+ALTER DEFAULT PRIVILEGES FOR ROLE analytics_rw IN SCHEMA analytics
+    GRANT SELECT ON TABLES TO analytics_ro;
+
+-- Deliberately NOT granted: any write or DDL on `public` for EITHER role;
+-- analytics_rw gets NO `public` access at all (USAGE or SELECT); CREATEDB;
+-- CREATEROLE; SUPERUSER; access to other schemas (langfuse, etc.). If a future
+-- analytics view needs llm_costs / coach_messages, those are in `public` and
+-- already covered by analytics_ro's SELECT grant above (read on the replica).
