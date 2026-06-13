@@ -51,8 +51,18 @@ services:
         # Confirmed syntax from langfuse-stack.yml (chat repo).
         constraints: [node.hostname == rishi-6]
       resources:
-        limits:   { cpus: "0.75", memory: 768M }
-        reservations: { cpus: "0.10", memory: 128M }
+        # Sized to rishi-6's live state (8 logical cores / 62G RAM; ~4G used,
+        # 0.15 load avg, ~51G free — confirmed via Beszel + docker stats by
+        # Session 6, 2026-06-13). Committed container limits on the box today
+        # total ~10.3G (Patroni replica 3G, Langfuse web 1.5G + worker 1G +
+        # ClickHouse 4G, Redis Sentinel 256M, etcd 512M). 4 CPU / 8G matches
+        # ClickHouse's ballpark, leaves 4 logical cores free during analytics
+        # bursts, and is 13% of RAM. Tight enough to never starve the box; big
+        # enough not to throttle the hourly sessionization refresh over the
+        # 3.4M-row messages table. Reservations stay small so Swarm placement
+        # never fails at deploy time.
+        limits:   { cpus: "4.0", memory: 8G }
+        reservations: { cpus: "0.5", memory: 1G }
       restart_policy:
         condition: any
         delay: 5s
