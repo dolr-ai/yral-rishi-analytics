@@ -1,0 +1,89 @@
+# ── yral-rishi-analytics — Docker Swarm deploy spec ───────────────────────
+#
+# Read-only internal analytics service. Pinned to rishi-6 (co-located with
+# Langfuse + a Patroni node). Modest resource caps so it can NEVER starve the
+# box that also hosts the Patroni replica it reads from — isolation is the
+# whole point of this being a separate service.
+#
+# IMAGE TAG / ROLLBACK CONVENTION
+#   IMAGE_TAG defaults to :stable. Each deploy:
+#     1. pushes ghcr.io/dolr-ai/yral-rishi-analytics:<git-sha>
+#     2. on success, re-tags that SHA as :stable
+#   Rollback = redeploy with the previous SHA and re-point :stable. The
+#   :stable tag always names the last-known-good image.
+#
+# NOT DEPLOYED IN PHASE 0. This is spec/config only — `docker stack deploy`
+# is a privileged op gated on Rishi's go (and on the analytics_ro DB role +
+# the analytics.rishi.yral.com Caddy stanza existing first).
+
+version: "3.9"
+
+services:
+
+  analytics:
+    image: ${IMAGE_REPO:-ghcr.io/dolr-ai/yral-rishi-analytics}:${IMAGE_TAG:-stable}
+    hostname: yral-rishi-analytics
+    networks:
+      # data-plane: reach the Patroni replica + Redis Sentinel (read-only).
+      - yral-v2-data-plane
+      # internal: Caddy on the edge routes analytics.rishi.yral.com here.
+      - yral-v2-internal
+    environment:
+      ENVIRONMENT: production
+      APP_VERSION: ${IMAGE_TAG:-stable}
+      SESSION_GAP_MINUTES: ${SESSION_GAP_MINUTES:-20}
+      ENGAGED_MIN_USER_MSGS: ${ENGAGED_MIN_USER_MSGS:-4}
+      SMALL_SAMPLE_THRESHOLD: ${SMALL_SAMPLE_THRESHOLD:-30}
+      REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
+      REDIS_PORT: ${REDIS_PORT:-26379}
+      ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://analytics.rishi.yral.com/auth/google/callback}
+    secrets:
+      # DSN points at a Patroni READ REPLICA with the analytics_ro role.
+      # Mounted as a file (database.py reads /run/secrets/analytics_db_dsn).
+      - analytics_db_dsn
+      # Google OAuth client secret — added at Phase B by Rishi, out-of-band.
+      - analytics_google_oauth_client_secret
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        # Confirmed syntax from langfuse-stack.yml (chat repo).
+        constraints: [node.hostname == rishi-6]
+      resources:
+        limits:   { cpus: "0.75", memory: 768M }
+        reservations: { cpus: "0.10", memory: 128M }
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 5
+      # Roll forward one task at a time; auto-rollback on a failed update so a
+      # bad analytics deploy self-heals to the previous task without a human.
+      update_config:
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        order: start-first
+    healthcheck:
+      # /healthz returns 503 unless the read-only replica pool is reachable.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/healthz',timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+secrets:
+  analytics_db_dsn:
+    external: true
+  analytics_google_oauth_client_secret:
+    external: true
+
+networks:
+  yral-v2-data-plane:
+    external: true
+  yral-v2-internal:
+    external: true
