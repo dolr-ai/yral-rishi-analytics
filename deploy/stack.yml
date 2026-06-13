@@ -39,9 +39,11 @@ services:
       REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
       REDIS_PORT: ${REDIS_PORT:-26379}
       ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
-      # The OAuth client ID is not sensitive (the secret is a Swarm secret).
-      # Empty until Rishi creates the client at Phase B → login stays dormant.
-      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      # The OAuth client ID is not sensitive (the matching Client SECRET is the
+      # Swarm secret analytics_google_oauth_client_secret, wired only at flip
+      # time). Pre-staged so Google login is ready to flip — but auth stays
+      # DORMANT until the client secret + session secret land (auth_enabled()).
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-496041156865-o1tp9333bparionftl9e0uj2u2hbqufc.apps.googleusercontent.com}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://analytics.rishi.yral.com/auth/google/callback}
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
