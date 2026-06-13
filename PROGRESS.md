@@ -22,9 +22,21 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Phase A — Foundation + first signal
 | Item | Status |
 |---|---|
-| `analytics_sessions` view in `analytics` schema + hourly refresh loop | ⏳ Pending (blocked: needs the gated DB role/schema) |
+| `db/analytics_sessions.sql` — sessionization materialized view DDL | 🔄 In PR (authored, NOT executed — gated on DB role/schema) |
+| Hourly refresh loop (mirrors `_trending_stats_refresher`) | ⏳ Pending (blocked on refresh-connection question below) |
 | `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | ⏳ Pending |
 | Headline route (3 numbers, behind temporary shared-secret token) | ⏳ Pending |
+
+> **OPEN QUESTION for Rishi (blocks the refresh loop, not the DDL):** a
+> materialized-view REFRESH is physically a *write*, and writes only land on
+> the Patroni **leader**. But `database.py` opens a **replica-only, read-only**
+> pool (Part C: "never the primary"). Design §3.4 says analytics writes its own
+> small hourly `analytics`-schema objects **to the primary**. So the hourly
+> refresh needs a narrow, clearly-scoped maintenance connection to the leader
+> (used ONLY for `REFRESH ... analytics.analytics_sessions`, never for product
+> reads). Need Rishi's call on: (a) confirm a leader maintenance connection is
+> acceptable per §3.4, or (b) avoid materialization and compute sessions on-read
+> over a bounded recent window. The view DDL above is valid either way.
 
 ## Phase B — Google login
 | Item | Status |
