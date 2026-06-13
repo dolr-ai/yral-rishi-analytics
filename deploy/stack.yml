@@ -39,7 +39,12 @@ services:
       REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
       REDIS_PORT: ${REDIS_PORT:-26379}
       ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
+      # The OAuth client ID is not sensitive (the secret is a Swarm secret).
+      # Empty until Rishi creates the client at Phase B → login stays dormant.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://analytics.rishi.yral.com/auth/google/callback}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
     secrets:
       # DSN points at a Patroni READ REPLICA with the analytics_ro role.
       # Mounted as a file (database.py reads /run/secrets/analytics_db_dsn).
@@ -50,6 +55,9 @@ services:
       - analytics_db_dsn_rw
       # Google OAuth client secret — added at Phase B by Rishi, out-of-band.
       - analytics_google_oauth_client_secret
+      # Signs the short-lived OAuth-handshake cookie (SessionMiddleware). Must be
+      # stable + shared across workers; generate a random value, Phase B.
+      - analytics_session_secret
     deploy:
       mode: replicated
       replicas: 1
@@ -98,6 +106,8 @@ secrets:
   analytics_db_dsn_rw:
     external: true
   analytics_google_oauth_client_secret:
+    external: true
+  analytics_session_secret:
     external: true
 
 networks:

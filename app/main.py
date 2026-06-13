@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+import auth
 import config
 import database
+from repositories import login_audit_repo
 from routes.headline import router as headline_router
 from routes.health import router as health_router
 from services import sessions_refresh
@@ -59,6 +61,11 @@ async def lifespan(app: FastAPI):
     if config.ANALYTICS_DB_DSN_RW:
         refresher_task = asyncio.create_task(_sessions_refresher())
         logger.info("Sessions refresher started (hourly)")
+        # Ensure the durable login-audit table exists (created via analytics_rw).
+        try:
+            await login_audit_repo.ensure_table(await database.get_write_pool())
+        except Exception:
+            logger.exception("login_audit ensure_table failed")
     else:
         logger.info("ANALYTICS_DB_DSN_RW unset — sessions refresher dormant")
 
@@ -81,5 +88,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# SessionMiddleware carries only the short-lived OAuth handshake state (a signed
+# cookie); the real login session lives in Redis. Mounted only when the secret
+# exists, so auth stays fully dormant until Phase B is provisioned.
+_session_secret = auth.read_session_secret()
+if _session_secret:
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_secret,
+        https_only=config.SESSION_COOKIE_SECURE,
+        same_site="lax",
+    )
+
 app.include_router(health_router)
 app.include_router(headline_router)
+
+# Google login routes mount only when the OAuth client + secret are provisioned;
+# until then /headline falls back to the temp token (auth.require_dashboard_access).
+if auth.auth_enabled():
+    app.include_router(auth.router)
+    logger.info("Google login enabled (@%s only)", config.ALLOWED_EMAIL_DOMAIN)
+else:
+    logger.info("Google login dormant — /headline uses the temporary token")

@@ -1,35 +1,25 @@
 """Phase A — the first-signal headline route.
 
 Renders the three load-bearing numbers (engaged sessions today, second-message
-rate, W1 return rate) as plain tiles, gated by a TEMPORARY shared-secret token
-so Rishi can see signal before Google login lands (design §9 PR A3). This page
-is deliberately plain — the calm, beautiful Glance (View 0) supersedes it in
-Phase C (Frontend session). The token is retired in Phase B.
+rate, W1 return rate) as plain tiles. Access is the shared dashboard gate
+(auth.require_dashboard_access): Google login once it's live, the temporary
+shared-secret token until then. This page is deliberately plain — the calm,
+beautiful Glance (View 0) supersedes it in Phase C (Frontend session).
 
 Honesty about small samples is built in: any number whose sample size is below
 SMALL_SAMPLE_THRESHOLD renders "too early to trust" instead of a figure
 (design §8), with its n shown either way.
 """
 
-import hmac
-
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
 import config
 import database
+from auth import require_dashboard_access
 from repositories import analytics_repo
 
 router = APIRouter(tags=["Headline"])
-
-
-def _check_token(token: str) -> None:
-    # Constant-time compare; deny when no token is configured (locked by
-    # default). This is a stopgap gate, not real auth — Phase B replaces it
-    # with Google Workspace login restricted to @gobazzinga.io.
-    expected = config.HEADLINE_TOKEN
-    if not expected or not hmac.compare_digest(token, expected):
-        raise HTTPException(status_code=401, detail="invalid or missing token")
 
 
 def _figure(value: str, n: int) -> str:
@@ -45,8 +35,7 @@ def _pct(rate: float | None) -> str:
 
 
 @router.get("/headline", response_class=HTMLResponse)
-async def headline(token: str = Query(default="")) -> str:
-    _check_token(token)
+async def headline(_access: str = Depends(require_dashboard_access)) -> str:
     pool = await database.get_pool()
 
     engaged = await analytics_repo.engaged_sessions_today(pool)

@@ -90,3 +90,17 @@ GOOGLE_OAUTH_REDIRECT_URI = _env(
     "https://analytics.rishi.yral.com/auth/google/callback",
 )
 ALLOWED_EMAIL_DOMAIN = _env("ALLOWED_EMAIL_DOMAIN", "gobazzinga.io")
+
+# Login sessions (Phase B). The login session is an opaque high-entropy id
+# stored in Redis (a blip just forces re-login); the cookie holds only that id.
+SESSION_COOKIE_NAME = _env("SESSION_COOKIE_NAME", "analytics_session")
+SESSION_TTL_SECONDS = _env_int("SESSION_TTL_SECONDS", 7 * 24 * 3600)
+# Secure cookie by default (HTTPS-only). Set false only for local http testing.
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", True)
+
+# Signs the SHORT-LIVED OAuth-handshake cookie (Starlette SessionMiddleware,
+# used only to carry state/nonce between /auth/login and the callback — NOT the
+# login session itself). Must be stable + shared across workers/replicas, so it
+# comes from a Swarm secret; read as a file first (see auth.py). Auth stays
+# dormant until this exists.
+SESSION_SECRET = _env("SESSION_SECRET")

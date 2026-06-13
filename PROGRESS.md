@@ -42,9 +42,19 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Phase B — Google login
 | Item | Status |
 |---|---|
-| `analytics_login_audit` table (analytics schema) | ⏳ Pending |
-| `auth.py` — Google OAuth, domain check, Redis session, audit | ⏳ Pending |
+| `docs/RUNBOOK.md` + password-substitution + both-roles-on-main notes | 🔄 In PR |
+| `analytics_login_audit` table + `login_audit_repo.py` (B1) | 🔄 In PR (validated locally) |
+| `auth.py` — Google OAuth, domain check, Redis session, audit (B2) | 🔄 In PR (authored; **UNVERIFIED** — needs OAuth client + Redis) |
+| Temp `/headline` token retired (auto, once auth configured) | 🔄 In PR |
+| Google OAuth client (consent screen Internal + Web client + redirect URI) | 🔒 Gated on Rishi (create at Phase B) |
+| Swarm secrets: `analytics_session_secret`, `analytics_google_oauth_client_secret` | 🔒 Gated on Rishi |
 | `analytics.rishi.yral.com` Caddy stanza | 🔒 Gated on Rishi |
+
+> **B2 is authored but UNVERIFIED** — the OAuth + Redis-session paths can't run
+> until Rishi creates the Google OAuth client and Redis is reachable. Auth stays
+> **dormant** until the OAuth client id/secret + `analytics_session_secret` are
+> provisioned; until then `/headline` uses the temp token (validated locally).
+> The token retires automatically the moment auth goes live (no flag flip).
 
 ## Phases C–H
 | Item | Status |
