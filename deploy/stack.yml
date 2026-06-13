@@ -34,6 +34,8 @@ services:
       SESSION_GAP_MINUTES: ${SESSION_GAP_MINUTES:-20}
       ENGAGED_MIN_USER_MSGS: ${ENGAGED_MIN_USER_MSGS:-4}
       SMALL_SAMPLE_THRESHOLD: ${SMALL_SAMPLE_THRESHOLD:-30}
+      SESSIONS_REFRESH_INTERVAL_SEC: ${SESSIONS_REFRESH_INTERVAL_SEC:-3600}
+      SESSIONS_REFRESH_READ_TIMEOUT: ${SESSIONS_REFRESH_READ_TIMEOUT:-60s}
       REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
       REDIS_PORT: ${REDIS_PORT:-26379}
       ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
@@ -42,6 +44,10 @@ services:
       # DSN points at a Patroni READ REPLICA with the analytics_ro role.
       # Mounted as a file (database.py reads /run/secrets/analytics_db_dsn).
       - analytics_db_dsn
+      # DSN points at the Patroni LEADER with the analytics_rw role — used ONLY
+      # by the hourly refresh job to write the analytics-schema summary. While
+      # absent, the refresher stays dormant (no leader contact at all).
+      - analytics_db_dsn_rw
       # Google OAuth client secret — added at Phase B by Rishi, out-of-band.
       - analytics_google_oauth_client_secret
     deploy:
@@ -88,6 +94,8 @@ services:
 
 secrets:
   analytics_db_dsn:
+    external: true
+  analytics_db_dsn_rw:
     external: true
   analytics_google_oauth_client_secret:
     external: true

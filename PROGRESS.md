@@ -22,21 +22,22 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Phase A — Foundation + first signal
 | Item | Status |
 |---|---|
-| `db/analytics_sessions.sql` — sessionization materialized view DDL | 🔄 In PR (authored + locally validated on PG16 synthetic data; NOT executed against any product DB) |
-| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | 🔄 In PR (authored + validated; SELECT-only against the view) |
+| `analytics.analytics_sessions` — service-refreshed TABLE (was a mat view) | 🔄 In PR (authored + locally validated on PG16 synthetic data; NOT executed) |
+| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | 🔄 In PR (authored + validated; SELECT-only against the table) |
 | Headline route (3 numbers, behind temporary shared-secret token) | 🔄 In PR (authored; `/headline?token=…`, plain tiles, retired in Phase B) |
-| Hourly refresh loop (mirrors `_trending_stats_refresher`) | ⏳ Pending (blocked on refresh-connection question below) |
+| Hourly refresh job — replica read → leader write (`services/sessions_refresh.py`) | 🔄 In PR (authored; dormant until `ANALYTICS_DB_DSN_RW` exists) |
+| `analytics_rw` role added to `db/setup_analytics_ro.sql` | 🔄 In PR (gated; runs once with Rishi's go) |
 
-> **OPEN QUESTION for Rishi (blocks the refresh loop, not the DDL):** a
-> materialized-view REFRESH is physically a *write*, and writes only land on
-> the Patroni **leader**. But `database.py` opens a **replica-only, read-only**
-> pool (Part C: "never the primary"). Design §3.4 says analytics writes its own
-> small hourly `analytics`-schema objects **to the primary**. So the hourly
-> refresh needs a narrow, clearly-scoped maintenance connection to the leader
-> (used ONLY for `REFRESH ... analytics.analytics_sessions`, never for product
-> reads). Need Rishi's call on: (a) confirm a leader maintenance connection is
-> acceptable per §3.4, or (b) avoid materialization and compute sessions on-read
-> over a bounded recent window. The view DDL above is valid either way.
+> **RESOLVED — Rishi 2026-06-13, Option B (replica-crunch, leader-write).** The
+> hourly summary is a regular **table**, not a materialized view: the heavy
+> ~3.4M-row aggregation runs on the **replica** (`analytics_ro`, 5s timeout
+> raised to 60s for that one scan via `SET LOCAL`); only the small finished
+> result is written to the **leader** in one transaction via the new
+> **`analytics_rw`** role (60s timeout, writes the `analytics` schema only, zero
+> `public` access). A mat-view REFRESH was rejected — it would run both halves
+> on the chat primary. The refresher stays dormant until `ANALYTICS_DB_DSN_RW`
+> is provisioned, so there's no leader contact until then. **The complete gated
+> setup script (with `analytics_rw`) lives on this Phase A branch.**
 
 ## Phase B — Google login
 | Item | Status |

@@ -31,6 +31,23 @@ PORT = _env_int("PORT", 8001)
 # (see database.py) so the DSN never lives in an env var or in git.
 ANALYTICS_DB_DSN = _env("ANALYTICS_DB_DSN")
 
+# The leader (primary) DSN for the analytics_rw role — used ONLY by the hourly
+# sessionization refresh job to write the small finished summary into the
+# analytics schema (Option B, Rishi 2026-06-13). Empty until the rw role/secret
+# exist; while empty the refresh loop stays dormant (main.py) so nothing tries
+# to reach the leader. Read as a Docker-secret file first (see database.py).
+ANALYTICS_DB_DSN_RW = _env("ANALYTICS_DB_DSN_RW")
+
+# Hourly refresh of analytics.analytics_sessions (mirrors the chat service's
+# _trending_stats_refresher cadence). The heavy read runs on the replica; only
+# the small result is written to the leader.
+SESSIONS_REFRESH_INTERVAL_SEC = _env_int("SESSIONS_REFRESH_INTERVAL_SEC", 3600)
+
+# The refresh's heavy aggregation scan is the one analytics_ro query allowed to
+# exceed the 5s default — raised to this, scoped to the refresh transaction
+# only (SET LOCAL), so the 5s cap still protects every user-facing read.
+SESSIONS_REFRESH_READ_TIMEOUT = _env("SESSIONS_REFRESH_READ_TIMEOUT", "60s")
+
 # Redis — login-session storage only (ephemeral; a blip just forces re-login).
 # Durable audit lives in Postgres (analytics schema), not here. Same Sentinel
 # cluster the chat service uses, reachable from rishi-6.
