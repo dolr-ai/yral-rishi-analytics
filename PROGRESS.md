@@ -56,14 +56,23 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 > provisioned; until then `/headline` uses the temp token (validated locally).
 > The token retires automatically the moment auth goes live (no flag flip).
 
+## Post-first-signal patches (21γ)
+| Item | Status |
+|---|---|
+| P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | 🔄 In PR (#4) |
+| P20 — startup table-ensure + `/headline` "warming up" (no 500) | 🔄 In PR (#4) |
+
 ## Phases C–H
 | Item | Status |
 |---|---|
 | C: The Glance (beautiful) | ⏳ Pending |
-| D: Retention + depth views | ⏳ Pending |
+| **D / View 1: Comeback Curve (cohort retention grid)** | 🔄 In PR (full stack: `retention_repo` + `/retention`; validated locally) |
+| D: depth views (still-here-at-N, return-to-same-bot) | ⏳ Pending (after first signal informs) |
 | E: Bots + negative signals | ⏳ Pending |
 | F: Drill-down chrome (metadata; raw transcripts held per §7.1) | ⏳ Pending |
 | G: Coach funnel + economics | ⏳ Pending |
 | H: Iterate (weekly) | ⏳ Pending |
 
+Full stack owned by one session (queries + server-rendered HTML); no separate
+Frontend session. Deeper D–G views build informed by the live numbers.
 Nothing merges to `main` until Rishi green-lights post-rollout stability.

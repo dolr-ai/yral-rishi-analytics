@@ -10,6 +10,7 @@ import database
 from repositories import login_audit_repo
 from routes.headline import router as headline_router
 from routes.health import router as health_router
+from routes.retention import router as retention_router
 from services import sessions_refresh
 
 logging.basicConfig(
@@ -110,6 +111,7 @@ if _session_secret:
 
 app.include_router(health_router)
 app.include_router(headline_router)
+app.include_router(retention_router)
 
 # Google login routes mount only when the OAuth client + secret are provisioned;
 # until then /headline falls back to the temp token (auth.require_dashboard_access).
