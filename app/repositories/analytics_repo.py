@@ -61,11 +61,18 @@ async def second_message_rate(pool, since_days: int = 7) -> dict:
 
 
 async def w1_return_rate(pool) -> dict:
-    """THE love number. Of users whose FIRST engaged session was 7-21 days
-    ago (long enough that a 7-day return window has fully elapsed, recent
-    enough to read as "this week's newly-engaged"), what fraction came back —
-    had any later session within 7 days of that first engaged one (design
-    §4 View 0). Cohort size is the sample size."""
+    """THE love number, reconciled to the cohort grid (View 1) — the source of
+    truth. Of newly-engaged users (first engaged session 7-21 days ago, so the
+    window has fully elapsed), the fraction who had a **distinct later ENGAGED
+    session within 7 days** of that first one.
+
+    The "engaged" filter on the return is load-bearing: without it (the original
+    bug) a user who later sent a single "hi" counted as returned, and since
+    engaged users generate many such incidental one-message sittings, the rate
+    was wildly inflated (74% live, above every cohort in the grid). Requiring the
+    return to be a genuine engaged sitting (≥ENGAGED_MIN_USER_MSGS user turns),
+    strictly after the first, is the cohort definition of "came back".
+    Cohort size is the sample size."""
     row = await pool.fetchrow(
         """
         WITH first_engaged AS (
@@ -81,10 +88,13 @@ async def w1_return_rate(pool) -> dict:
               AND first_at >= (now() AT TIME ZONE 'utc') - interval '21 days'
         ),
         returned AS (
+            -- a DISTINCT later ENGAGED sitting within 7 days — not just any
+            -- session (the original omission that inflated the number).
             SELECT DISTINCT c.user_id
             FROM cohort c
             JOIN analytics.analytics_sessions s
               ON s.user_id = c.user_id
+             AND s.user_turns >= $1
              AND s.started_at >  c.first_at
              AND s.started_at <= c.first_at + interval '7 days'
         )

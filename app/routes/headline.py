@@ -98,6 +98,6 @@ async def headline(_access: str = Depends(require_dashboard_access)) -> str:
 <div class="tile">
   <div class="label">W1 return rate of newly-engaged users</div>
   <div class="value">{_figure(_pct(w1["rate"]), w1["n"])}</div>
-  <div class="why">Of users first engaged 7–21 days ago, the share who came back within 7 days. THE love number.</div>
+  <div class="why">Of users first engaged 7–21 days ago, the share who had another <em>engaged</em> conversation within 7 days. THE love number.</div>
 </div>
 </body></html>"""
