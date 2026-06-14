@@ -89,6 +89,13 @@ GROUP BY conversation_id, session_index, user_id, influencer_id
 """
 
 
+async def ensure_table(write_pool) -> None:
+    # Idempotent CREATE — called once at startup so the table exists before the
+    # service serves a single request (otherwise it's created only by the first
+    # refresh, leaving a window where /headline hits a missing table). Fast.
+    await write_pool.execute(_CREATE_TABLE_SQL)
+
+
 async def refresh_sessions() -> int:
     """Recompute the session summary on the replica, then replace the leader
     table in one transaction. Returns the row count written."""

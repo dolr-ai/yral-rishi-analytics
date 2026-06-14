@@ -16,6 +16,18 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return _env(key, str(default)).lower() in ("true", "1", "yes")
 
 
+def _secret(key: str, default: str = "") -> str:
+    # File-first, mirroring database.py: a Swarm secret mounts at
+    # /run/secrets/<key> (more secure than an env var), falling back to the env
+    # var for local/dev. Lets a secret like HEADLINE_TOKEN ship as a real Swarm
+    # secret so the `docker service update --env-add` workaround can be dropped.
+    path = f"/run/secrets/{key}"
+    if os.path.exists(path):
+        with open(path) as f:
+            return f.read().strip()
+    return _env(key, default)
+
+
 # App
 APP_NAME = _env("APP_NAME", "Yral Analytics")
 APP_VERSION = _env("APP_VERSION", "0.1.0")
@@ -74,10 +86,11 @@ ENGAGED_MIN_USER_MSGS = _env_int("ENGAGED_MIN_USER_MSGS", 4)
 SMALL_SAMPLE_THRESHOLD = _env_int("SMALL_SAMPLE_THRESHOLD", 30)
 
 # Temporary shared-secret token gating the headline route so Rishi can see
-# first signal BEFORE Google login (Phase B) is wired. Set via Swarm secret /
-# env; empty by default so the route denies everyone until a token exists.
-# RETIRED in Phase B (PR B2) once real auth lands — it is not real auth.
-HEADLINE_TOKEN = _env("HEADLINE_TOKEN")
+# first signal BEFORE Google login (Phase B) is wired. File-first (Swarm secret
+# /run/secrets/HEADLINE_TOKEN), env fallback; empty by default so the route
+# denies everyone until a token exists. RETIRED automatically once Google auth
+# is configured — it is not real auth.
+HEADLINE_TOKEN = _secret("HEADLINE_TOKEN")
 
 # Google Workspace OAuth — restricts login to @gobazzinga.io. The client ID +
 # secret are created by Rishi in Google Cloud Console at Phase B and injected
