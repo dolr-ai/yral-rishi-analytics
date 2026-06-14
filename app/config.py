@@ -16,15 +16,22 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return _env(key, str(default)).lower() in ("true", "1", "yes")
 
 
+_SECRETS_DIR = "/run/secrets"
+
+
 def _secret(key: str, default: str = "") -> str:
     # File-first, mirroring database.py: a Swarm secret mounts at
-    # /run/secrets/<key> (more secure than an env var), falling back to the env
-    # var for local/dev. Lets a secret like HEADLINE_TOKEN ship as a real Swarm
-    # secret so the `docker service update --env-add` workaround can be dropped.
-    path = f"/run/secrets/{key}"
-    if os.path.exists(path):
-        with open(path) as f:
-            return f.read().strip()
+    # /run/secrets/<name> (more secure than an env var), falling back to the env
+    # var for local/dev. Tries the key as-given AND lowercased, because env vars
+    # are UPPER_CASE but some secrets mount under their lowercase swarm-secret
+    # name (e.g. ANALYTICS_DB_DSN_RW the env var vs analytics_db_dsn_rw the file).
+    # Without this the dormancy gate and the reader (database.py) disagreed and
+    # the refresher stayed dormant.
+    for name in (key, key.lower()):
+        path = f"{_SECRETS_DIR}/{name}"
+        if os.path.exists(path):
+            with open(path) as f:
+                return f.read().strip()
     return _env(key, default)
 
 
@@ -39,16 +46,18 @@ PORT = _env_int("PORT", 8001)
 # analytics reads must never load the node that serves the chat path. The
 # analytics_ro role is itself read-only + statement_timeout-capped at the
 # DB level (see db/setup_analytics_ro.sql); the replica endpoint here is the
-# second layer of that belt-and-braces. Read as a Docker-secret file first
-# (see database.py) so the DSN never lives in an env var or in git.
-ANALYTICS_DB_DSN = _env("ANALYTICS_DB_DSN")
+# second layer of that belt-and-braces. File-first (the secret mounts as
+# /run/secrets/analytics_db_dsn) so the DSN never lives in an env var or in git.
+ANALYTICS_DB_DSN = _secret("ANALYTICS_DB_DSN")
 
 # The leader (primary) DSN for the analytics_rw role — used ONLY by the hourly
 # sessionization refresh job to write the small finished summary into the
-# analytics schema (Option B, Rishi 2026-06-13). Empty until the rw role/secret
-# exist; while empty the refresh loop stays dormant (main.py) so nothing tries
-# to reach the leader. Read as a Docker-secret file first (see database.py).
-ANALYTICS_DB_DSN_RW = _env("ANALYTICS_DB_DSN_RW")
+# analytics schema (Option B, Rishi 2026-06-13). File-first via _secret so this
+# dormancy GATE agrees with database.py's reader: both resolve the lowercase
+# /run/secrets/analytics_db_dsn_rw file. (Previously this read the empty
+# uppercase env var, so the gate stayed false and the refresher never woke.)
+# Empty until the rw secret exists; while empty the refresh loop stays dormant.
+ANALYTICS_DB_DSN_RW = _secret("ANALYTICS_DB_DSN_RW")
 
 # Hourly refresh of analytics.analytics_sessions (mirrors the chat service's
 # _trending_stats_refresher cadence). The heavy read runs on the replica; only
@@ -65,7 +74,12 @@ SESSIONS_REFRESH_READ_TIMEOUT = _env("SESSIONS_REFRESH_READ_TIMEOUT", "60s")
 # cluster the chat service uses, reachable from rishi-6.
 REDIS_HOST = _env("REDIS_HOST", "redis-sentinel-rishi-4")
 REDIS_PORT = _env_int("REDIS_PORT", 26379)
-REDIS_SENTINEL_MASTER = _env("REDIS_SENTINEL_MASTER", "mymaster")
+# The real master name on this cluster (not the redis default "mymaster").
+REDIS_SENTINEL_MASTER = _env("REDIS_SENTINEL_MASTER", "yral-v2-redis-primary")
+# This cluster's Redis requires AUTH on both the sentinels and the master.
+# File-first (mounts as /run/secrets/REDIS_PASSWORD). Without it, Google login
+# sessions can't be stored. Empty in dev → no-auth (session_store handles it).
+REDIS_PASSWORD = _secret("REDIS_PASSWORD")
 
 # Sessionization knob — a new "session" (one sitting of back-and-forth) starts
 # when the gap since the previous message in a conversation exceeds this. 20,

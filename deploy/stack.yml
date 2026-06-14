@@ -60,6 +60,11 @@ services:
       # Signs the short-lived OAuth-handshake cookie (SessionMiddleware). Must be
       # stable + shared across workers; generate a random value, Phase B.
       - analytics_session_secret
+      # Redis AUTH password — this cluster's Sentinel + master require it, or
+      # Google sessions can't be stored. The existing cluster secret is mounted
+      # under the UPPER_CASE target the app reads (/run/secrets/REDIS_PASSWORD).
+      - source: yral_v2_redis_primary_password_ceeb8b19
+        target: REDIS_PASSWORD
     deploy:
       mode: replicated
       replicas: 1
@@ -110,6 +115,8 @@ secrets:
   analytics_google_oauth_client_secret:
     external: true
   analytics_session_secret:
+    external: true
+  yral_v2_redis_primary_password_ceeb8b19:
     external: true
 
 networks:

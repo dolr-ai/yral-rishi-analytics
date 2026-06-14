@@ -59,8 +59,17 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Post-first-signal patches (21γ)
 | Item | Status |
 |---|---|
-| P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | 🔄 In PR (#4) |
-| P20 — startup table-ensure + `/headline` "warming up" (no 500) | 🔄 In PR (#4) |
+| P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | ✅ Merged (#4 → main) |
+| P20 — startup table-ensure + `/headline` "warming up" (no 500) | ✅ Merged (#4 → main) |
+
+## Google-login flip gaps (2026-06-14)
+Four repo-side gaps surfaced by the first flip attempt (auth reverted to dormant):
+| Gap | Fix | Status |
+|---|---|---|
+| Redis AUTH missing → sessions can't store | `session_store` passes `REDIS_PASSWORD` to Sentinel + master_for; secret mounted in `stack.yml` | 🔄 In PR (validated vs throwaway auth Sentinel) |
+| Wrong Sentinel master name | `REDIS_SENTINEL_MASTER` default → `yral-v2-redis-primary` | 🔄 In PR |
+| `login_audit` never created (OAuth callback 500) | startup ensure now activated by the gap-4 fix; each ensure independently guarded | 🔄 In PR |
+| `ANALYTICS_DB_DSN_RW` case-mismatch froze the refresher | `config` reads DSNs via case-robust `_secret()`; gate now agrees with the reader | 🔄 In PR (validated) |
 
 ## Phases C–H
 | Item | Status |
