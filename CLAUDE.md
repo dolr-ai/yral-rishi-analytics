@@ -38,11 +38,14 @@ The agent v2 chat service serves real users. It must NEVER go down or degrade
 because of anything analytics does. Treat any temptation to bend these as a
 stop-and-ask-Rishi event.
 
-- **DB: read-only, replica-only.** Connect ONLY to a Patroni read replica,
-  never the leader. Use the `analytics_ro` role (SELECT on `public`, no
-  INSERT/UPDATE/DELETE/ALTER/DROP/TRUNCATE). Role is read-only + 5s
-  statement_timeout at the DB level. The ONLY writes allowed are to the
-  service's own `analytics` schema.
+- **DB: replica reads, one tiny leader write.** Dashboard + heavy reads use
+  the `analytics_ro` role on a Patroni **read replica** (SELECT on `public`,
+  read-only, 5s statement_timeout). The **sole** contact with the Patroni
+  **leader** is the hourly refresh job's small write into the `analytics`
+  schema via the new `analytics_rw` role — never a heavy read on the leader
+  (all heavy reads run on the replica via analytics_ro), never any write to
+  `public`. The ONLY writes analytics may do, on either node, are to its own
+  `analytics` schema (Option B, Rishi 2026-06-13).
 - **No migrations against product tables. Ever.** The sole DDL allowed is
   `db/setup_analytics_ro.sql`, run ONCE with Rishi's explicit go, pg_dump first.
 - **Never touch the yral-rishi-agent chat service.** No edits to its repo, no

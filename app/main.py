@@ -1,11 +1,17 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+import auth
 import config
 import database
+from repositories import login_audit_repo
+from routes.headline import router as headline_router
 from routes.health import router as health_router
+from routes.retention import router as retention_router
+from services import sessions_refresh
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,15 +20,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _sessions_refresher():
+    """Refresh analytics.analytics_sessions hourly (mirrors the chat service's
+    _trending_stats_refresher). Heavy read on the replica, small write to the
+    leader. Never crashes the service — a failed refresh just logs and waits
+    for the next tick (isolation: analytics degrades on its own)."""
+    try:
+        await sessions_refresh.refresh_sessions()
+    except Exception:
+        logger.exception("sessions refresh: initial run failed")
+
+    while True:
+        await asyncio.sleep(config.SESSIONS_REFRESH_INTERVAL_SEC)
+        try:
+            await sessions_refresh.refresh_sessions()
+        except Exception:
+            logger.exception("sessions refresh: run failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {config.APP_NAME} v{config.APP_VERSION}")
     logger.info(f"Environment: {config.ENVIRONMENT}")
 
     # Open the read-only pool eagerly so /healthz reflects real DB reachability
-    # from the first request. No background loops yet — the hourly sessionization
-    # refresher arrives in Phase A. Keeping startup boring is deliberate: this
-    # service must never become a dependency the chat path can trip over.
+    # from the first request. Keeping startup boring is deliberate: this service
+    # must never become a dependency the chat path can trip over.
     try:
         await database.get_pool()
         logger.info("Analytics database pool initialized successfully")
@@ -32,9 +55,36 @@ async def lifespan(app: FastAPI):
         # gracefully on its own, never cascading.
         logger.error(f"Failed to initialize database pool at startup: {e}")
 
+    # The hourly refresher is the ONLY thing that touches the leader, so it
+    # stays dormant until the analytics_rw DSN exists (post DB-setup). No rw
+    # DSN → no leader contact at all, by construction.
+    refresher_task = None
+    if config.ANALYTICS_DB_DSN_RW:
+        # Create the analytics-schema tables BEFORE we serve, so /headline never
+        # hits a missing table (otherwise the sessions table exists only after
+        # the first refresh completes). Fast — just CREATE TABLE IF NOT EXISTS.
+        try:
+            write_pool = await database.get_write_pool()
+            await sessions_refresh.ensure_table(write_pool)
+            await login_audit_repo.ensure_table(write_pool)
+        except Exception:
+            logger.exception("startup ensure_table failed (refresher will retry)")
+        # The refresher then runs an initial refresh immediately, then hourly
+        # (modelled on the chat service's _trending_stats_refresher).
+        refresher_task = asyncio.create_task(_sessions_refresher())
+        logger.info("Sessions refresher started (initial + hourly)")
+    else:
+        logger.info("ANALYTICS_DB_DSN_RW unset — sessions refresher dormant")
+
     yield
 
     logger.info("Shutting down...")
+    if refresher_task is not None:
+        refresher_task.cancel()
+        try:
+            await refresher_task
+        except asyncio.CancelledError:
+            pass
     await database.close_pool()
     logger.info("Shutdown complete")
 
@@ -45,4 +95,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# SessionMiddleware carries only the short-lived OAuth handshake state (a signed
+# cookie); the real login session lives in Redis. Mounted only when the secret
+# exists, so auth stays fully dormant until Phase B is provisioned.
+_session_secret = auth.read_session_secret()
+if _session_secret:
+    from starlette.middleware.sessions import SessionMiddleware
+
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_secret,
+        https_only=config.SESSION_COOKIE_SECURE,
+        same_site="lax",
+    )
+
 app.include_router(health_router)
+app.include_router(headline_router)
+app.include_router(retention_router)
+
+# Google login routes mount only when the OAuth client + secret are provisioned;
+# until then /headline falls back to the temp token (auth.require_dashboard_access).
+if auth.auth_enabled():
+    app.include_router(auth.router)
+    logger.info("Google login enabled (@%s only)", config.ALLOWED_EMAIL_DOMAIN)
+else:
+    logger.info("Google login dormant — /headline uses the temporary token")

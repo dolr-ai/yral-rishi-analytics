@@ -34,16 +34,32 @@ services:
       SESSION_GAP_MINUTES: ${SESSION_GAP_MINUTES:-20}
       ENGAGED_MIN_USER_MSGS: ${ENGAGED_MIN_USER_MSGS:-4}
       SMALL_SAMPLE_THRESHOLD: ${SMALL_SAMPLE_THRESHOLD:-30}
+      SESSIONS_REFRESH_INTERVAL_SEC: ${SESSIONS_REFRESH_INTERVAL_SEC:-3600}
+      SESSIONS_REFRESH_READ_TIMEOUT: ${SESSIONS_REFRESH_READ_TIMEOUT:-60s}
       REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
       REDIS_PORT: ${REDIS_PORT:-26379}
       ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
+      # The OAuth client ID is not sensitive (the matching Client SECRET is the
+      # Swarm secret analytics_google_oauth_client_secret, wired only at flip
+      # time). Pre-staged so Google login is ready to flip — but auth stays
+      # DORMANT until the client secret + session secret land (auth_enabled()).
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-496041156865-o1tp9333bparionftl9e0uj2u2hbqufc.apps.googleusercontent.com}
       GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-https://analytics.rishi.yral.com/auth/google/callback}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
     secrets:
       # DSN points at a Patroni READ REPLICA with the analytics_ro role.
       # Mounted as a file (database.py reads /run/secrets/analytics_db_dsn).
       - analytics_db_dsn
+      # DSN points at the Patroni LEADER with the analytics_rw role — used ONLY
+      # by the hourly refresh job to write the analytics-schema summary. While
+      # absent, the refresher stays dormant (no leader contact at all).
+      - analytics_db_dsn_rw
       # Google OAuth client secret — added at Phase B by Rishi, out-of-band.
       - analytics_google_oauth_client_secret
+      # Signs the short-lived OAuth-handshake cookie (SessionMiddleware). Must be
+      # stable + shared across workers; generate a random value, Phase B.
+      - analytics_session_secret
     deploy:
       mode: replicated
       replicas: 1
@@ -89,7 +105,11 @@ services:
 secrets:
   analytics_db_dsn:
     external: true
+  analytics_db_dsn_rw:
+    external: true
   analytics_google_oauth_client_secret:
+    external: true
+  analytics_session_secret:
     external: true
 
 networks:

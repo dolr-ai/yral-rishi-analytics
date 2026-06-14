@@ -22,25 +22,57 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 ## Phase A — Foundation + first signal
 | Item | Status |
 |---|---|
-| `analytics_sessions` view in `analytics` schema + hourly refresh loop | ⏳ Pending (blocked: needs the gated DB role/schema) |
-| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | ⏳ Pending |
-| Headline route (3 numbers, behind temporary shared-secret token) | ⏳ Pending |
+| `analytics.analytics_sessions` — service-refreshed TABLE (was a mat view) | 🔄 In PR (authored + locally validated on PG16 synthetic data; NOT executed) |
+| `repositories/analytics_repo.py` — engaged sessions, second-msg, W1 return | 🔄 In PR (authored + validated; SELECT-only against the table) |
+| Headline route (3 numbers, behind temporary shared-secret token) | 🔄 In PR (authored; `/headline?token=…`, plain tiles, retired in Phase B) |
+| Hourly refresh job — replica read → leader write (`services/sessions_refresh.py`) | 🔄 In PR (authored; dormant until `ANALYTICS_DB_DSN_RW` exists) |
+| `analytics_rw` role added to `db/setup_analytics_ro.sql` | 🔄 In PR (gated; runs once with Rishi's go) |
+
+> **RESOLVED — Rishi 2026-06-13, Option B (replica-crunch, leader-write).** The
+> hourly summary is a regular **table**, not a materialized view: the heavy
+> ~3.4M-row aggregation runs on the **replica** (`analytics_ro`, 5s timeout
+> raised to 60s for that one scan via `SET LOCAL`); only the small finished
+> result is written to the **leader** in one transaction via the new
+> **`analytics_rw`** role (60s timeout, writes the `analytics` schema only, zero
+> `public` access). A mat-view REFRESH was rejected — it would run both halves
+> on the chat primary. The refresher stays dormant until `ANALYTICS_DB_DSN_RW`
+> is provisioned, so there's no leader contact until then. **The complete gated
+> setup script (with `analytics_rw`) lives on this Phase A branch.**
 
 ## Phase B — Google login
 | Item | Status |
 |---|---|
-| `analytics_login_audit` table (analytics schema) | ⏳ Pending |
-| `auth.py` — Google OAuth, domain check, Redis session, audit | ⏳ Pending |
+| `docs/RUNBOOK.md` + password-substitution + both-roles-on-main notes | 🔄 In PR |
+| `analytics_login_audit` table + `login_audit_repo.py` (B1) | 🔄 In PR (validated locally) |
+| `auth.py` — Google OAuth, domain check, Redis session, audit (B2) | 🔄 In PR (authored; **UNVERIFIED** — needs OAuth client + Redis) |
+| Temp `/headline` token retired (auto, once auth configured) | 🔄 In PR |
+| Google OAuth client (consent screen Internal + Web client + redirect URI) | 🔒 Gated on Rishi (create at Phase B) |
+| Swarm secrets: `analytics_session_secret`, `analytics_google_oauth_client_secret` | 🔒 Gated on Rishi |
 | `analytics.rishi.yral.com` Caddy stanza | 🔒 Gated on Rishi |
+
+> **B2 is authored but UNVERIFIED** — the OAuth + Redis-session paths can't run
+> until Rishi creates the Google OAuth client and Redis is reachable. Auth stays
+> **dormant** until the OAuth client id/secret + `analytics_session_secret` are
+> provisioned; until then `/headline` uses the temp token (validated locally).
+> The token retires automatically the moment auth goes live (no flag flip).
+
+## Post-first-signal patches (21γ)
+| Item | Status |
+|---|---|
+| P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | 🔄 In PR (#4) |
+| P20 — startup table-ensure + `/headline` "warming up" (no 500) | 🔄 In PR (#4) |
 
 ## Phases C–H
 | Item | Status |
 |---|---|
 | C: The Glance (beautiful) | ⏳ Pending |
-| D: Retention + depth views | ⏳ Pending |
+| **D / View 1: Comeback Curve (cohort retention grid)** | 🔄 In PR (full stack: `retention_repo` + `/retention`; validated locally) |
+| D: depth views (still-here-at-N, return-to-same-bot) | ⏳ Pending (after first signal informs) |
 | E: Bots + negative signals | ⏳ Pending |
 | F: Drill-down chrome (metadata; raw transcripts held per §7.1) | ⏳ Pending |
 | G: Coach funnel + economics | ⏳ Pending |
 | H: Iterate (weekly) | ⏳ Pending |
 
+Full stack owned by one session (queries + server-rendered HTML); no separate
+Frontend session. Deeper D–G views build informed by the live numbers.
 Nothing merges to `main` until Rishi green-lights post-rollout stability.

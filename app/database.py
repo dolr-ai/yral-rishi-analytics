@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+_write_pool: asyncpg.Pool | None = None
 
 
 def _read_dsn() -> str:
@@ -20,6 +21,21 @@ def _read_dsn() -> str:
     if not config.ANALYTICS_DB_DSN:
         raise RuntimeError("ANALYTICS_DB_DSN is not set (no secret file, no env)")
     return config.ANALYTICS_DB_DSN
+
+
+def _read_dsn_rw() -> str:
+    # The analytics_rw DSN points at the Patroni LEADER. This is the service's
+    # ONLY leader contact — used solely by the hourly refresh job to write the
+    # small summary into the analytics schema (Option B). Secret-file first.
+    secret_file = "/run/secrets/analytics_db_dsn_rw"
+    if os.path.exists(secret_file):
+        with open(secret_file) as f:
+            return f.read().strip()
+    import config
+
+    if not config.ANALYTICS_DB_DSN_RW:
+        raise RuntimeError("ANALYTICS_DB_DSN_RW is not set (no secret file, no env)")
+    return config.ANALYTICS_DB_DSN_RW
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -48,12 +64,37 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def get_write_pool() -> asyncpg.Pool:
+    # The leader (analytics_rw) pool — opened lazily and ONLY when the hourly
+    # refresh job needs it. Deliberately NOT read-only (it writes the summary)
+    # and tiny: this is one small hourly transaction, never a read path. Its
+    # only target is the analytics schema; the rw role has no `public` access.
+    global _write_pool
+    if _write_pool is not None:
+        return _write_pool
+
+    dsn = _read_dsn_rw()
+    logger.info("Creating analytics WRITE pool (leader; analytics schema only)...")
+    _write_pool = await asyncpg.create_pool(
+        dsn=dsn,
+        min_size=1,
+        max_size=2,
+        command_timeout=90,
+    )
+    logger.info("Analytics write pool created successfully")
+    return _write_pool
+
+
 async def close_pool():
-    global _pool
+    global _pool, _write_pool
     if _pool is not None:
         await _pool.close()
         _pool = None
         logger.info("Analytics database connection pool closed")
+    if _write_pool is not None:
+        await _write_pool.close()
+        _write_pool = None
+        logger.info("Analytics write pool closed")
 
 
 async def check_db_health() -> bool:
