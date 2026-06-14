@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check app/
+      - run: ruff format --check app/
+
+  import-check:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      # Import the app from the app/ dir (bare imports, same as runtime). This
+      # proves the module graph wires up — config, database, routes, FastAPI
+      # app object — without a database. No DSN is set, so the lifespan's
+      # pool-open is skipped here; we only import, we do not run the server.
+      - name: Import app
+        working-directory: app
+        run: python -c "import main; assert main.app is not None; print('import ok')"
