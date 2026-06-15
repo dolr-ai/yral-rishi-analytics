@@ -22,18 +22,24 @@ _KEY_PREFIX = "analytics:session:"
 
 def _client():
     # Lazy Sentinel → current master. decode_responses so we get str back.
+    # This cluster requires AUTH: the password is needed BOTH for the sentinel
+    # connections (sentinel_kwargs) AND for the master connection (password=).
+    # Empty password (dev) → no auth.
     global _master
     if _master is None:
         from redis.asyncio.sentinel import Sentinel
 
+        pw = config.REDIS_PASSWORD or None
         sentinel = Sentinel(
             [(config.REDIS_HOST, config.REDIS_PORT)],
             socket_timeout=2.0,
+            sentinel_kwargs={"password": pw},
         )
         _master = sentinel.master_for(
             config.REDIS_SENTINEL_MASTER,
             socket_timeout=2.0,
             decode_responses=True,
+            password=pw,
         )
     return _master
 

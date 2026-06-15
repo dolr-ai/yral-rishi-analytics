@@ -60,15 +60,26 @@ async def lifespan(app: FastAPI):
     # DSN → no leader contact at all, by construction.
     refresher_task = None
     if config.ANALYTICS_DB_DSN_RW:
-        # Create the analytics-schema tables BEFORE we serve, so /headline never
-        # hits a missing table (otherwise the sessions table exists only after
-        # the first refresh completes). Fast — just CREATE TABLE IF NOT EXISTS.
+        # Create the analytics-schema tables BEFORE we serve, so neither
+        # /headline (sessions) nor the OAuth callback (login_audit) hits a
+        # missing table. Each ensure is guarded independently so one failing
+        # can't block the other; only runs when the write pool is available.
         try:
             write_pool = await database.get_write_pool()
-            await sessions_refresh.ensure_table(write_pool)
-            await login_audit_repo.ensure_table(write_pool)
         except Exception:
-            logger.exception("startup ensure_table failed (refresher will retry)")
+            write_pool = None
+            logger.exception("startup: write pool unavailable; tables not ensured")
+        if write_pool is not None:
+            for ensure in (
+                sessions_refresh.ensure_table,
+                login_audit_repo.ensure_table,
+            ):
+                try:
+                    await ensure(write_pool)
+                except Exception:
+                    logger.exception(
+                        "startup ensure_table failed (refresher will retry)"
+                    )
         # The refresher then runs an initial refresh immediately, then hourly
         # (modelled on the chat service's _trending_stats_refresher).
         refresher_task = asyncio.create_task(_sessions_refresher())
