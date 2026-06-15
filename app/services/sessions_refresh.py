@@ -105,10 +105,15 @@ async def refresh_sessions() -> int:
         # timeout for THIS transaction only, leaving the 5s default intact for
         # every user-facing read.
         async with rconn.transaction():
+            # Server-side guard...
             await rconn.execute(
-                f"SET LOCAL statement_timeout = '{config.SESSIONS_REFRESH_READ_TIMEOUT}'"
+                f"SET LOCAL statement_timeout = '{config.SESSIONS_REFRESH_READ_TIMEOUT_SEC}s'"
             )
-            rows = await rconn.fetch(_SESSIONIZE_SQL)
+            # ...AND a matching per-call client timeout, or the pool's 30s
+            # command_timeout kills this scan before the server timeout applies.
+            rows = await rconn.fetch(
+                _SESSIONIZE_SQL, timeout=config.SESSIONS_REFRESH_READ_TIMEOUT_SEC
+            )
 
     write_pool = await database.get_write_pool()
     async with write_pool.acquire() as wconn:

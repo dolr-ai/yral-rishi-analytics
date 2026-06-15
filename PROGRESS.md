@@ -62,6 +62,17 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 | P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | ✅ Merged (#4 → main) |
 | P20 — startup table-ensure + `/headline` "warming up" (no 500) | ✅ Merged (#4 → main) |
 
+## Sentinel auth + refresh timeout (2026-06-15, PR #8)
+| Gap | Fix | Status |
+|---|---|---|
+| Sentinel-level AUTH broke discovery (login 500) | master-ONLY auth — drop `sentinel_kwargs` password, keep `master_for(password=)` | 🔄 In PR (validated vs master-only-auth Sentinel) |
+| Refresher killed by pool's 30s client `command_timeout` (asyncpg.TimeoutError) | per-call `fetch(timeout=)` + matching `SET LOCAL`, both from `SESSIONS_REFRESH_READ_TIMEOUT_SEC=120` | 🔄 In PR |
+
+> **Tracked follow-up (NOT building yet):** replace the full hourly 3.4M-row
+> recompute with **incremental, watermark-based sessionization** (only
+> new/changed messages since the last refresh). A full recompute every hour
+> won't scale; design §3.5 flagged ~30s refresh as the trigger to go incremental.
+
 ## Google-login flip gaps (2026-06-14)
 Four repo-side gaps surfaced by the first flip attempt (auth reverted to dormant):
 | Gap | Fix | Status |
