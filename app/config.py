@@ -65,9 +65,12 @@ ANALYTICS_DB_DSN_RW = _secret("ANALYTICS_DB_DSN_RW")
 SESSIONS_REFRESH_INTERVAL_SEC = _env_int("SESSIONS_REFRESH_INTERVAL_SEC", 3600)
 
 # The refresh's heavy aggregation scan is the one analytics_ro query allowed to
-# exceed the 5s default — raised to this, scoped to the refresh transaction
-# only (SET LOCAL), so the 5s cap still protects every user-facing read.
-SESSIONS_REFRESH_READ_TIMEOUT = _env("SESSIONS_REFRESH_READ_TIMEOUT", "60s")
+# exceed the 5s default. This single value (seconds) drives BOTH the server-side
+# `SET LOCAL statement_timeout` AND the asyncpg client-side per-call timeout —
+# they must agree, or the pool's 30s command_timeout kills the 3.4M-row scan
+# (asyncpg.TimeoutError) long before the server timeout ever applies. 120s gives
+# the full recompute room; the 5s role default still protects user-facing reads.
+SESSIONS_REFRESH_READ_TIMEOUT_SEC = _env_int("SESSIONS_REFRESH_READ_TIMEOUT_SEC", 120)
 
 # Redis — login-session storage only (ephemeral; a blip just forces re-login).
 # Durable audit lives in Postgres (analytics schema), not here. Same Sentinel

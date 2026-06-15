@@ -22,24 +22,25 @@ _KEY_PREFIX = "analytics:session:"
 
 def _client():
     # Lazy Sentinel → current master. decode_responses so we get str back.
-    # This cluster requires AUTH: the password is needed BOTH for the sentinel
-    # connections (sentinel_kwargs) AND for the master connection (password=).
-    # Empty password (dev) → no auth.
+    # AUTH is MASTER-ONLY on this cluster: the Sentinels run unauthenticated,
+    # so the password goes ONLY to master_for, never to the Sentinel connection.
+    # Passing it to the Sentinel (sentinel_kwargs) makes discovery fail
+    # (AuthenticationError → MasterNotFoundError → callback 500). This mirrors
+    # the chat service's Redis pattern (redis_config.py: master URL, no sentinel
+    # auth). Empty password (dev) → no auth.
     global _master
     if _master is None:
         from redis.asyncio.sentinel import Sentinel
 
-        pw = config.REDIS_PASSWORD or None
         sentinel = Sentinel(
             [(config.REDIS_HOST, config.REDIS_PORT)],
             socket_timeout=2.0,
-            sentinel_kwargs={"password": pw},
         )
         _master = sentinel.master_for(
             config.REDIS_SENTINEL_MASTER,
             socket_timeout=2.0,
             decode_responses=True,
-            password=pw,
+            password=config.REDIS_PASSWORD or None,
         )
     return _master
 
