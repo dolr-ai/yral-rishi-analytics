@@ -36,6 +36,20 @@ A** PR adds `analytics_rw`. When the stack collapses to `main`, `main`'s
 `setup_analytics_ro.sql` **must contain BOTH roles** — sequential merges must not
 drop `analytics_rw`. Verify the merged file has both before running it.
 
+### One-time fix — `login_audit` ownership (gated)
+
+`analytics.analytics_login_audit` was hand-created as `postgres`, so `analytics_rw`
+can't write it (OAuth callback failed). Run **once** on the leader with Rishi's go:
+
+```sql
+-- db/fix_login_audit_owner.sql
+ALTER TABLE analytics.analytics_login_audit OWNER TO analytics_rw;
+```
+
+**Invariant going forward:** every `analytics`-schema object is created AND owned
+by `analytics_rw` (the service's `ensure_table` path). Never hand-create an
+analytics object as `postgres` again — that's what caused this.
+
 ## 2. Swarm secrets
 
 | Secret | Role / endpoint | Used by |
