@@ -1,21 +1,35 @@
-"""Phase A — the hourly sessionization refresh job (Option B, Rishi 2026-06-13).
+"""Phase A — the sessionization refresh job (Option B + incremental).
 
 The one place the service touches the Patroni leader. The split that keeps the
 chat node safe:
 
-  1. Heavy half — read + group all ~3.4M `messages` into sittings — runs on the
-     REPLICA via the analytics_ro pool (database.get_pool). Zero load on the
-     chat primary. The 5s analytics_ro default is raised to a refresh-only
-     window via SET LOCAL inside the read transaction.
-  2. Tiny half — write the finished summary — runs on the LEADER via the
-     analytics_rw pool (database.get_write_pool), in ONE transaction
-     (DELETE + COPY) so a dashboard reader never sees an empty table.
+  1. Read + group on the REPLICA via the analytics_ro pool (database.get_pool).
+     Zero load on the chat primary.
+  2. Write the finished summary on the LEADER via the analytics_rw pool
+     (database.get_write_pool), in ONE transaction so a dashboard reader never
+     sees a half-written table.
 
-A materialized-view REFRESH was rejected because it would do BOTH halves on the
-leader. See db/analytics_sessions.sql for the data model + the SQL mirrored here.
+INCREMENTAL (Rishi 2026-06-16): a full recompute reads ALL ~3.4M messages and
+sorts them for the window functions every run — EXPLAIN confirmed an
+index-driven plan (no seq-scan to fix), but the cost is inherent and we can't
+add an index to the product `messages` table (Part C). So each run recomputes
+ONLY the conversations with a message newer than the high-water mark
+(max(ended_at) already in the summary), then replaces just those rows. The
+first run on an empty table does the one-time full build. This bounds steady-
+state work to recently-active conversations instead of the whole corpus.
+
+Cancellation is clean: the server-side `SET LOCAL statement_timeout` is the real
+guard (a clean QueryCanceledError, connection stays usable); the asyncpg
+client-side timeout is set strictly ABOVE it so the server always cancels first
+— we never let the client timeout close the connection mid-transaction (which
+surfaced as InterfaceError). See db/analytics_sessions.sql for the data model.
 """
 
+import asyncio
 import logging
+from datetime import timedelta
+
+from asyncpg.exceptions import QueryCanceledError
 
 import config
 import database
@@ -58,8 +72,12 @@ CREATE INDEX IF NOT EXISTS idx_analytics_sessions_influencer
     ON analytics.analytics_sessions (influencer_id, started_at);
 """
 
-# The heavy aggregation, run on the REPLICA. Returns finished session rows in
-# _COLUMNS order. Mirrored as a comment in db/analytics_sessions.sql.
+# The aggregation, run on the REPLICA. Returns finished session rows in
+# _COLUMNS order. $1 is the conversation-id scope: NULL → every ai_chat
+# conversation (full build); a text[] → only those conversations (incremental).
+# When scoped, we still read each conversation's FULL history so its session
+# boundaries are computed correctly. Mirrored as a comment in
+# db/analytics_sessions.sql.
 _SESSIONIZE_SQL = """
 WITH ordered AS (
     SELECT m.conversation_id, c.user_id, c.influencer_id, m.role, m.created_at,
@@ -68,6 +86,7 @@ WITH ordered AS (
     FROM messages m
     JOIN conversations c ON c.id = m.conversation_id
     WHERE c.conversation_type = 'ai_chat'
+      AND ($1::text[] IS NULL OR m.conversation_id = ANY($1))
 ),
 flagged AS (
     SELECT *, CASE WHEN gap IS NULL OR gap > INTERVAL '20 minutes'
@@ -96,30 +115,70 @@ async def ensure_table(write_pool) -> None:
     await write_pool.execute(_CREATE_TABLE_SQL)
 
 
+async def _changed_conversations(read_pool, watermark) -> list[str]:
+    # Conversations with a message newer than the high-water mark, minus a small
+    # lookback buffer to absorb replica lag / equal-timestamp ties (re-processing
+    # a few recent conversations is harmless — the recompute is idempotent).
+    # Uses idx_messages_created_at, so it scans only recent messages.
+    cutoff = watermark - timedelta(minutes=config.SESSIONS_REFRESH_LOOKBACK_MIN)
+    rows = await read_pool.fetch(
+        "SELECT DISTINCT conversation_id FROM messages WHERE created_at > $1",
+        cutoff,
+    )
+    return [r["conversation_id"] for r in rows]
+
+
 async def refresh_sessions() -> int:
-    """Recompute the session summary on the replica, then replace the leader
-    table in one transaction. Returns the row count written."""
+    """Recompute sessions on the replica and replace the affected rows on the
+    leader. Incremental: only conversations changed since the high-water mark
+    (full build when the summary is empty). Returns the row count written, or
+    0 when nothing changed / the read was cancelled by the timeout guard."""
     read_pool = await database.get_pool()
-    async with read_pool.acquire() as rconn:
-        # Read-only transaction (the pool forces it); raise the heavy-scan
-        # timeout for THIS transaction only, leaving the 5s default intact for
-        # every user-facing read.
-        async with rconn.transaction():
-            # Server-side guard...
-            await rconn.execute(
-                f"SET LOCAL statement_timeout = '{config.SESSIONS_REFRESH_READ_TIMEOUT_SEC}s'"
-            )
-            # ...AND a matching per-call client timeout, or the pool's 30s
-            # command_timeout kills this scan before the server timeout applies.
-            rows = await rconn.fetch(
-                _SESSIONIZE_SQL, timeout=config.SESSIONS_REFRESH_READ_TIMEOUT_SEC
-            )
+
+    # High-water mark = latest message we've already sessionized. NULL → the
+    # summary is empty → one-time full build.
+    watermark = await read_pool.fetchval(
+        "SELECT max(ended_at) FROM analytics.analytics_sessions"
+    )
+    if watermark is None:
+        scope = None  # full
+    else:
+        scope = await _changed_conversations(read_pool, watermark)
+        if not scope:
+            logger.info("sessions refresh: nothing changed since %s", watermark)
+            return 0
+
+    server_sec = config.SESSIONS_REFRESH_READ_TIMEOUT_SEC
+    try:
+        async with read_pool.acquire() as rconn:
+            async with rconn.transaction():
+                # Server-side timeout is the REAL guard (clean cancel). The
+                # client timeout sits strictly above it so the server always
+                # cancels first — never the client closing the conn mid-txn.
+                await rconn.execute(f"SET LOCAL statement_timeout = '{server_sec}s'")
+                rows = await rconn.fetch(
+                    _SESSIONIZE_SQL, scope, timeout=server_sec + 30
+                )
+    except (QueryCanceledError, asyncio.TimeoutError):
+        logger.warning(
+            "sessions refresh cancelled by the %ss timeout (scope=%s); will retry",
+            server_sec,
+            "full" if scope is None else f"{len(scope)} convs",
+        )
+        return 0
 
     write_pool = await database.get_write_pool()
     async with write_pool.acquire() as wconn:
         async with wconn.transaction():
             await wconn.execute(_CREATE_TABLE_SQL)
-            await wconn.execute("DELETE FROM analytics.analytics_sessions")
+            if scope is None:
+                await wconn.execute("DELETE FROM analytics.analytics_sessions")
+            else:
+                await wconn.execute(
+                    "DELETE FROM analytics.analytics_sessions "
+                    "WHERE conversation_id = ANY($1)",
+                    scope,
+                )
             if rows:
                 await wconn.copy_records_to_table(
                     "analytics_sessions",
@@ -127,5 +186,9 @@ async def refresh_sessions() -> int:
                     records=rows,
                     columns=_COLUMNS,
                 )
-    logger.info("analytics_sessions refreshed: %d rows", len(rows))
+    logger.info(
+        "analytics_sessions refreshed: scope=%s, %d rows",
+        "full" if scope is None else f"{len(scope)} convs",
+        len(rows),
+    )
     return len(rows)

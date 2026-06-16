@@ -72,6 +72,11 @@ SESSIONS_REFRESH_INTERVAL_SEC = _env_int("SESSIONS_REFRESH_INTERVAL_SEC", 3600)
 # the full recompute room; the 5s role default still protects user-facing reads.
 SESSIONS_REFRESH_READ_TIMEOUT_SEC = _env_int("SESSIONS_REFRESH_READ_TIMEOUT_SEC", 120)
 
+# Incremental refresh re-processes conversations with a message newer than the
+# high-water mark, minus this lookback buffer (absorbs replica lag / ties; the
+# recompute is idempotent so a little overlap is free).
+SESSIONS_REFRESH_LOOKBACK_MIN = _env_int("SESSIONS_REFRESH_LOOKBACK_MIN", 5)
+
 # Redis — login-session storage only (ephemeral; a blip just forces re-login).
 # Durable audit lives in Postgres (analytics schema), not here. Same Sentinel
 # cluster the chat service uses, reachable from rishi-6.

@@ -62,6 +62,16 @@ Phase 0 build: complete (local). Privileged ops queued for Rishi.
 | P19 — `HEADLINE_TOKEN` file-first (drop `--env-add` workaround) | ✅ Merged (#4 → main) |
 | P20 — startup table-ensure + `/headline` "warming up" (no 500) | ✅ Merged (#4 → main) |
 
+## Refresher proper fix + audit ownership (2026-06-16, PR #9)
+| Item | Fix | Status |
+|---|---|---|
+| Refresher full-recompute too slow (timed out hourly) | **incremental watermark sessionization** — recompute only conversations changed since `max(ended_at)`; full build only when empty. EXPLAIN showed an index-driven plan (no seq-scan to fix) + can't index the product `messages` table → incremental is the fix | 🔄 In PR (5.3s full → 2.8ms scoped, local 3.4M repro) |
+| Timeout surfaced as InterfaceError | server `SET LOCAL` is the guard; client timeout sits ABOVE it so the server cancels first (clean `QueryCanceledError`); caught + retried | 🔄 In PR |
+| `login_audit` owned by `postgres` → `analytics_rw` can't write | gated `db/fix_login_audit_owner.sql` (`ALTER TABLE … OWNER TO analytics_rw`, Session 6 runs) + invariant: all analytics objects owned by `analytics_rw` | 🔒 Gated (validated: before=permission denied, after=insert ok) |
+
+> **Done with the §3.5 follow-up:** the full hourly recompute is replaced by
+> incremental. Steady-state work is now bounded to recently-active conversations.
+
 ## Sentinel auth + refresh timeout (2026-06-15, PR #8)
 | Gap | Fix | Status |
 |---|---|---|
