@@ -38,19 +38,13 @@ jobs:
             echo "$LOGIN" | jq '{errors}'
             exit 1
           fi
-          echo "vault login OK. token policies:"
-          echo "$LOGIN" | jq -c '.auth.policies'
+          echo "TOKEN_POLICIES=$(echo "$LOGIN" | jq -c '.auth.policies')"
 
-          # 3) capabilities-self — the definitive check (no value disclosed)
-          echo "=== capabilities-self ==="
-          curl -sS -X POST "$VAULT_ADDR/v1/sys/capabilities-self" \
+          # 3) capabilities-self — definitive (path -> caps), no value disclosed
+          echo "CAPS=$(curl -sS -X POST "$VAULT_ADDR/v1/sys/capabilities-self" \
             -H "X-Vault-Token: $TOKEN" \
-            -d '{"paths":[
-              "secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN",
-              "secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN/x",
-              "secret/metadata/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN",
-              "secret/data/yral-rishi-analytics/x"
-            ]}' | jq '.capabilities // .'
+            -d '{"paths":["secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN","secret/data/yral-rishi-analytics/x"]}' \
+            | jq -c 'to_entries|map(select(.key|test("SAIKAT|yral-rishi")))|from_entries')"
 
           # 4) raw read attempt — HTTP status ONLY, never the body/value
           echo "=== read attempt (status only) ==="
