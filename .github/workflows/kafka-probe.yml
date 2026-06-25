@@ -47,18 +47,24 @@ jobs:
             -d '{"topics":["snowplow-enriched"]}'
           echo "subscribed to snowplow-enriched"
 
-          for i in 1 2 3 4 5 6; do
-            REC=$(ch -H "Accept: application/vnd.kafka.binary.v2+json" "$BASE/records?timeout=10000")
-            N=$(echo "$REC" | jq 'length')
-            echo "poll $i -> $N records"
+          set +e  # tolerate transient non-JSON polls without aborting
+          for i in $(seq 1 8); do
+            HTTP=$(ch -o /tmp/poll.json -w '%{http_code}' \
+              -H "Accept: application/vnd.kafka.binary.v2+json" "$BASE/records?timeout=10000")
+            BYTES=$(wc -c < /tmp/poll.json | tr -d ' ')
+            echo "poll $i -> HTTP $HTTP, ${BYTES} bytes"
+            if [ "$HTTP" != "200" ]; then echo "  non-200 body: $(head -c 300 /tmp/poll.json)"; continue; fi
+            N=$(jq 'length' /tmp/poll.json 2>/dev/null)
+            if [ -z "$N" ]; then echo "  not JSON; first 120 chars: $(head -c 120 /tmp/poll.json)"; continue; fi
+            echo "  records: $N"
             [ "$N" -gt 0 ] || continue
-            echo "$REC" | jq -r '.[0:2][].value' | while read -r V; do
-              echo "$V" | base64 -d > /tmp/rec || continue
+            jq -r '.[0:2][].value' /tmp/poll.json | while read -r V; do
+              printf '%s' "$V" | base64 -d > /tmp/rec 2>/dev/null || continue
               echo "===== record STRUCTURE (no PII) ====="
-              awk -F'\t' '{print "fields(NF): " NF; c=0; for(i=1;i<=NF;i++) if($i!="") c++; print "non-empty fields: " c}' /tmp/rec
-              echo "fields 1-7 (app_id|platform|etl_ts|collector_ts|dvce_ts|event|event_id):"
-              cut -f1-7 /tmp/rec
-              awk -F'\t' '{print "contexts(~52) present: " ($52!=""); print "unstruct_event(~58) present: " ($58!="")}' /tmp/rec
+              awk -F'\t' '{print "  fields(NF): " NF; c=0; for(i=1;i<=NF;i++) if($i!="") c++; print "  non-empty: " c}' /tmp/rec
+              echo "  fields 1-7 (app_id|platform|etl_ts|collector_ts|dvce_ts|event|event_id):"
+              cut -f1-7 /tmp/rec | sed 's/^/    /'
+              awk -F'\t' '{print "  contexts(~52) present: " ($52!=""); print "  unstruct(~58) present: " ($58!="")}' /tmp/rec
             done
             break
           done
