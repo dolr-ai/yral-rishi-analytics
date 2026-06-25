@@ -32,17 +32,19 @@ jobs:
           GROUP: bridge-yral-rishi-analytics-probe
         run: |
           set -euo pipefail
-          ch() { curl -sS -H "X-Bearer-Token: $KAFKA_TOKEN" "$@"; }
+          ch() { curl -sSL -H "X-Bearer-Token: $KAFKA_TOKEN" "$@"; }
 
           RESP=$(ch -X POST "$BRIDGE/consumers/$GROUP" \
             -H "Content-Type: application/vnd.kafka.v2+json" \
             -d '{"format":"binary","auto.offset.reset":"earliest"}')
-          BASE=$(echo "$RESP" | jq -r '.base_uri')
-          echo "consumer created"
-          cleanup() { ch -X DELETE "$BASE" >/dev/null 2>&1 || true; echo "consumer deleted"; }
+          INST=$(echo "$RESP" | jq -r '.instance_id')
+          echo "consumer created (instance captured); base_uri scheme: $(echo "$RESP" | jq -r '.base_uri' | sed -E 's,://.*,,')"
+          # Build URLs from the PUBLIC base + instance_id — the returned base_uri 301-redirects.
+          INSTBASE="$BRIDGE/consumers/$GROUP/instances/$INST"
+          cleanup() { ch -X DELETE "$INSTBASE" >/dev/null 2>&1 || true; echo "consumer deleted"; }
           trap cleanup EXIT
 
-          ch -X POST "$BASE/subscription" \
+          ch -X POST "$INSTBASE/subscription" \
             -H "Content-Type: application/vnd.kafka.v2+json" \
             -d '{"topics":["snowplow-enriched"]}'
           echo "subscribed to snowplow-enriched"
@@ -50,7 +52,7 @@ jobs:
           set +e  # tolerate transient non-JSON polls without aborting
           for i in $(seq 1 8); do
             HTTP=$(ch -o /tmp/poll.json -w '%{http_code}' \
-              -H "Accept: application/vnd.kafka.binary.v2+json" "$BASE/records?timeout=10000")
+              -H "Accept: application/vnd.kafka.binary.v2+json" "$INSTBASE/records?timeout=10000")
             BYTES=$(wc -c < /tmp/poll.json | tr -d ' ')
             echo "poll $i -> HTTP $HTTP, ${BYTES} bytes"
             if [ "$HTTP" != "200" ]; then echo "  non-200 body: $(head -c 300 /tmp/poll.json)"; continue; fi
