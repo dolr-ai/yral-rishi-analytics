@@ -1,0 +1,80 @@
+name: kafka-probe
+
+# One-off empirical probe of Saikat's Snowplow Kafka bridge.
+# Runs on push to the `kafka-probe` branch (no merge-to-main needed).
+# Verifies the Vault OIDC grant works AND shows the real enriched-event shape
+# so we can design the ClickHouse schema + consumer against reality.
+#
+# PRIVACY GUARD: the bridge carries real user events. This workflow prints
+# ONLY structure — field count, the leading non-PII metadata fields (1-7:
+# app_id, platform, timestamps, event type, event_id) and non-empty-field
+# counts. It NEVER prints the PII-bearing middle/late fields (user ids, IP,
+# geo, URLs, contexts/unstruct payloads).
+
+on:
+  push:
+    branches: [kafka-probe]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch bridge token from Vault (OIDC)
+        uses: hashicorp/vault-action@v3
+        with:
+          url: https://vault.yral.com
+          method: jwt
+          role: yral-rishi-analytics-role
+          jwtGithubAudience: https://github.com/dolr-ai
+          secrets: |
+            secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN value | KAFKA_TOKEN
+
+      - name: Probe snowplow-enriched (structure only, no PII)
+        env:
+          BRIDGE: https://kafka-bridge.yral.com
+          GROUP: bridge-yral-rishi-analytics-probe
+        run: |
+          set -euo pipefail
+          ch() { curl -sS -H "X-Bearer-Token: $KAFKA_TOKEN" "$@"; }
+
+          echo "::group::create consumer (earliest)"
+          RESP=$(ch -X POST "$BRIDGE/consumers/$GROUP" \
+            -H "Content-Type: application/vnd.kafka.v2+json" \
+            -d '{"format":"binary","auto.offset.reset":"earliest"}')
+          BASE=$(echo "$RESP" | jq -r '.base_uri')
+          echo "consumer created (base_uri captured)"
+          echo "::endgroup::"
+
+          cleanup() { ch -X DELETE "$BASE" >/dev/null 2>&1 || true; echo "consumer deleted"; }
+          trap cleanup EXIT
+
+          ch -X POST "$BASE/subscription" \
+            -H "Content-Type: application/vnd.kafka.v2+json" \
+            -d '{"topics":["snowplow-enriched"]}'
+          echo "subscribed to snowplow-enriched"
+
+          FOUND=0
+          for i in 1 2 3 4 5 6; do
+            REC=$(ch -H "Accept: application/vnd.kafka.binary.v2+json" "$BASE/records?timeout=10000")
+            N=$(echo "$REC" | jq 'length')
+            echo "poll $i -> $N records"
+            [ "$N" -gt 0 ] || continue
+            FOUND=1
+            echo "$REC" | jq -r '.[0:3][] | .value' | while read -r V; do
+              echo "$V" | base64 -d > /tmp/rec || continue
+              echo "===== record (STRUCTURE ONLY) ====="
+              awk -F'\t' '{print "total fields (NF): " NF}' /tmp/rec
+              awk -F'\t' '{c=0; for(i=1;i<=NF;i++) if($i!="") c++; print "non-empty fields: " c}' /tmp/rec
+              echo "leading metadata fields 1-7 (app_id|platform|etl_ts|collector_ts|dvce_ts|event|event_id):"
+              cut -f1-7 /tmp/rec
+              # presence (not content) of the contexts(~52) + unstruct_event(~58) JSON fields
+              awk -F'\t' '{print "contexts(52) present: " ($52!=""); print "unstruct_event(58) present: " ($58!="")}' /tmp/rec
+              echo "==================================="
+            done
+            break
+          done
+          [ "$FOUND" -eq 1 ] || echo "NO RECORDS in 'earliest' polls — topic may be empty or offset behavior differs; report this."
