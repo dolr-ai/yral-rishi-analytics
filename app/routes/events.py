@@ -9,6 +9,7 @@ the events pipeline only started flowing recently, so we show counts + a
 """
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
@@ -18,9 +19,19 @@ import config
 from auth import require_dashboard_access
 from repositories import events_repo
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Views"])
 
 _CHART_JS = "https://cdn.jsdelivr.net/npm/chart.js@4"
+
+
+async def _safe(coro, default):
+    # One failing query drops to one empty/blank card, never blanks the page.
+    try:
+        return await coro
+    except Exception:
+        logger.exception("events: a section query failed")
+        return default
 
 
 def _pct(x: float | None) -> str:
@@ -115,26 +126,29 @@ def _retention_html(retention: list[tuple]) -> str:
 
 @router.get("/events", response_class=HTMLResponse)
 async def events(_access: str = Depends(require_dashboard_access)) -> str:
-    client = await clickhouse.get_client()
     try:
-        active = await events_repo.active_users(client)
-        dau = await events_repo.dau_trend(client)
-        volume = await events_repo.event_volume(client)
-        top_events = await events_repo.top_events(client)
-        top_views = await events_repo.top_views(client)
-        platforms = await events_repo.platform_breakdown(client)
-        span_days = await events_repo.data_span_days(client)
-        funnel = await events_repo.funnel(client, events_repo.FUNNEL_STEPS)
-        influencers = await events_repo.influencer_engagement(client)
-        depth = await events_repo.message_depth(client)
-        returning = await events_repo.returning_user_rate(client)
-        retention = await events_repo.event_retention(client)
-        wow = await events_repo.wow(client)
-        by_action = await events_repo.events_by_action(client)
-        recent = await events_repo.recent_activity(client)
+        client = await clickhouse.get_client()
     except Exception:
-        # raw_events not there yet / no reader access yet — warming up, not 500.
+        # ClickHouse unreachable entirely — warming up, not a 500.
         return _shell("<p>Events are still warming up — check back shortly.</p>")
+
+    # Each section fetched independently — a failing query yields an empty card,
+    # not a blank page (the event_retention 403 took the whole page down once).
+    active = await _safe(events_repo.active_users(client), {})
+    dau = await _safe(events_repo.dau_trend(client), [])
+    volume = await _safe(events_repo.event_volume(client), [])
+    top_events = await _safe(events_repo.top_events(client), [])
+    top_views = await _safe(events_repo.top_views(client), [])
+    platforms = await _safe(events_repo.platform_breakdown(client), [])
+    span_days = await _safe(events_repo.data_span_days(client), 0)
+    funnel = await _safe(events_repo.funnel(client, events_repo.FUNNEL_STEPS), [])
+    influencers = await _safe(events_repo.influencer_engagement(client), [])
+    depth = await _safe(events_repo.message_depth(client), [])
+    returning = await _safe(events_repo.returning_user_rate(client), {})
+    retention = await _safe(events_repo.event_retention(client), [])
+    wow = await _safe(events_repo.wow(client), {})
+    by_action = await _safe(events_repo.events_by_action(client), [])
+    recent = await _safe(events_repo.recent_activity(client), {})
 
     total_events = sum(int(n) for _, n in volume)
     # Chart.js specs (lines + bars), injected as JSON; one tiny init loops them.
@@ -216,10 +230,10 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
 <div class="glance">
   <div class="gtile"><div class="label">Funnel conversion</div><div class="huge">{funnel_conv}</div>
     <div class="sub">home → first message</div></div>
-  <div class="gtile"><div class="label">Stickiness</div><div class="huge">{_pct(active["stickiness"])}</div>
+  <div class="gtile"><div class="label">Stickiness</div><div class="huge">{_pct(active.get("stickiness"))}</div>
     <div class="sub">DAU / MAU</div></div>
-  <div class="gtile"><div class="label">Returning users</div><div class="huge">{_pct(returning["rate"])}</div>
-    <div class="sub">seen on &gt;1 day &nbsp;<small>n={returning["n"]}</small></div></div>
+  <div class="gtile"><div class="label">Returning users</div><div class="huge">{_pct(returning.get("rate"))}</div>
+    <div class="sub">seen on &gt;1 day &nbsp;<small>n={returning.get("n", 0)}</small></div></div>
 </div>"""
 
     body = f"""
@@ -229,20 +243,20 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
 <div class="card pmf"><h2>PMF glance</h2>{glance}</div>
 
 <div class="card recent"><h2>Right now</h2>
-  <div id="recent" class="big">{recent["events_15m"]} events · {recent["users_15m"]} users <small>last 15 min</small></div>
-  <div class="muted">{recent["events_60m"]} in the last hour · auto-refreshes every 30s</div>
+  <div id="recent" class="big">{recent.get("events_15m", 0)} events · {recent.get("users_15m", 0)} users <small>last 15 min</small></div>
+  <div class="muted">{recent.get("events_60m", 0)} in the last hour · auto-refreshes every 30s</div>
 </div>
 
 <div class="tiles">
-  <div class="tile"><div class="label">Daily active users</div><div class="big">{active["dau"]}</div></div>
-  <div class="tile"><div class="label">Weekly active</div><div class="big">{active["wau"]}</div></div>
-  <div class="tile"><div class="label">Monthly active</div><div class="big">{active["mau"]}</div> <small>n={active["mau"]}</small></div>
-  <div class="tile"><div class="label">Stickiness (DAU/MAU)</div><div class="big">{_pct(active["stickiness"])}</div></div>
+  <div class="tile"><div class="label">Daily active users</div><div class="big">{active.get("dau", "—")}</div></div>
+  <div class="tile"><div class="label">Weekly active</div><div class="big">{active.get("wau", "—")}</div></div>
+  <div class="tile"><div class="label">Monthly active</div><div class="big">{active.get("mau", "—")}</div> <small>n={active.get("mau", "—")}</small></div>
+  <div class="tile"><div class="label">Stickiness (DAU/MAU)</div><div class="big">{_pct(active.get("stickiness"))}</div></div>
 </div>
 
 <div class="grid2">
-  <div class="card"><h2>Active users (30d){_delta(wow["users_delta"])}</h2><canvas id="dau"></canvas></div>
-  <div class="card"><h2>Event volume (30d){_delta(wow["events_delta"])}</h2><canvas id="vol"></canvas></div>
+  <div class="card"><h2>Active users (30d){_delta(wow.get("users_delta"))}</h2><canvas id="dau"></canvas></div>
+  <div class="card"><h2>Event volume (30d){_delta(wow.get("events_delta"))}</h2><canvas id="vol"></canvas></div>
   <div class="card"><h2>Top events (7d)</h2><canvas id="topev"></canvas></div>
   <div class="card"><h2>Top views (7d)</h2><canvas id="views"></canvas></div>
   <div class="card"><h2>Events by type (7d)</h2><canvas id="byaction"></canvas></div>
