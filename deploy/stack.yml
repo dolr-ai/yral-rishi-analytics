@@ -66,6 +66,9 @@ services:
       # under the UPPER_CASE target the app reads (/run/secrets/REDIS_PASSWORD).
       - source: yral_v2_redis_primary_password_ceeb8b19
         target: REDIS_PASSWORD
+      # Read-only ClickHouse DSN (analytics_reader user) for the /events
+      # dashboards. clickhouse.py reads /run/secrets/analytics_clickhouse_reader_dsn.
+      - analytics_clickhouse_reader_dsn
     deploy:
       mode: replicated
       replicas: 1
@@ -118,6 +121,8 @@ secrets:
   analytics_session_secret:
     external: true
   yral_v2_redis_primary_password_ceeb8b19:
+    external: true
+  analytics_clickhouse_reader_dsn:
     external: true
 
 networks:

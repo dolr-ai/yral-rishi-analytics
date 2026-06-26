@@ -57,7 +57,17 @@ async def _consume_loop(bridge: BridgeConsumer, sink: ClickHouseSink) -> None:
     buffer: list[tuple] = []
     last_flush = time.monotonic()
     while True:
-        values = await bridge.poll()
+        # Backpressure: if the buffer is at its cap (ClickHouse stalled), stop
+        # pulling from the bridge so memory can't grow unbounded. Offsets stay
+        # uncommitted, so the bridge holds the backlog for us (no data loss).
+        if len(buffer) >= config.EVENTS_MAX_BUFFER:
+            logger.warning(
+                "buffer at cap (%d) — pausing intake until a flush drains it",
+                len(buffer),
+            )
+            values = []
+        else:
+            values = await bridge.poll()
         _stats["last_poll_records"] = len(values)
         for value in values:
             try:

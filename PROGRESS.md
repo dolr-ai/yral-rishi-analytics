@@ -3,6 +3,22 @@
 The checklist. Status: ✅ Done · ⏳ Pending · 🔄 In PR · 🔒 Gated on Rishi.
 Phases mirror the design doc (`analytics-100x-vision.md` §9).
 
+## Event dashboards — /events (2026-06-26, PR #11)
+Mixpanel/PostHog-style product analytics over the live `analytics.raw_events`.
+| Piece | Status |
+|---|---|
+| `clickhouse.py` — read-only async client (analytics_reader DSN, file-first) | 🔄 In PR |
+| `repositories/events_repo.py` — DAU/WAU/MAU, stickiness, volume, top events/screens, platform/version, configurable funnel | 🔄 In PR (all 8 queries validated via chdb) |
+| `routes/events.py` — `/events` Google-gated, Chart.js trends+bars, calm layout, small-N banner | 🔄 In PR (render validated) |
+| Funnel — `windowFunnel` scaffold; **steps = TODO(Rishi)** once Top Events seen | 🔄 In PR (engine validated; steps deferred) |
+| Consumer follow-up — bound the buffer (backpressure, no OOM) | 🔄 In PR |
+| `analytics_clickhouse_reader_dsn` secret in the dashboard stack | 🔒 Coordinator mounts + redeploys |
+
+> Consumer typed-column enrichment (event-type/se_category/se_action) **deferred**
+> to a focused PR — it needs a live-table `ALTER` + deploy ordering, and the
+> dashboards read those fields from the JSON column today, so it's a perf
+> optimization, not a blocker.
+
 ## Real-time events pipeline — analytics-events-consumer (2026-06-26, PR #10)
 Mobile → Saikat's Strimzi Kafka **bridge** → OUR consumer → OUR ClickHouse.
 A separate Swarm service (same image, `uvicorn consumer_main:app`).
