@@ -1,0 +1,166 @@
+"""View — Product analytics overview (/events), Mixpanel/PostHog-style.
+
+Big active-users number → trends → top events / screens bars → stickiness →
+platform breakdown → funnel (configurable; steps TBD). Google-auth-gated via the
+shared dashboard gate. Chart.js (CDN) for the time-series + bars; the rest is
+server-rendered HTML in the same calm style as /headline. Honest about small N —
+the events pipeline only started flowing recently, so we show counts + a
+"still filling in" banner and never draw a confident trend over a day of data.
+"""
+
+import json
+
+from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
+
+import clickhouse
+from auth import require_dashboard_access
+from repositories import events_repo
+
+router = APIRouter(tags=["Views"])
+
+_CHART_JS = "https://cdn.jsdelivr.net/npm/chart.js@4"
+
+
+def _pct(x: float | None) -> str:
+    return f"{x * 100:.0f}%" if x is not None else "—"
+
+
+@router.get("/events", response_class=HTMLResponse)
+async def events(_access: str = Depends(require_dashboard_access)) -> str:
+    client = await clickhouse.get_client()
+    try:
+        active = await events_repo.active_users(client)
+        dau = await events_repo.dau_trend(client)
+        volume = await events_repo.event_volume(client)
+        top_events = await events_repo.top_events(client)
+        top_screens = await events_repo.top_screens(client)
+        platforms = await events_repo.platform_breakdown(client)
+        span_days = await events_repo.data_span_days(client)
+    except Exception:
+        # raw_events not there yet / no reader access yet — warming up, not 500.
+        return _shell("<p>Events are still warming up — check back shortly.</p>")
+
+    total_events = sum(int(n) for _, n in volume)
+    # Chart.js specs (lines + bars), injected as JSON; one tiny init loops them.
+    charts = [
+        {
+            "id": "dau",
+            "type": "line",
+            "label": "Daily active users",
+            "labels": [str(d) for d, _ in dau],
+            "data": [int(v) for _, v in dau],
+        },
+        {
+            "id": "vol",
+            "type": "line",
+            "label": "Events / day",
+            "labels": [str(d) for d, _ in volume],
+            "data": [int(v) for _, v in volume],
+        },
+        {
+            "id": "topev",
+            "type": "bar",
+            "label": "Events (7d)",
+            "labels": [f"{c}/{a}" for c, a, _ in top_events],
+            "data": [int(n) for _, _, n in top_events],
+        },
+        {
+            "id": "screens",
+            "type": "bar",
+            "label": "Screen views (7d)",
+            "labels": [s for s, _ in top_screens],
+            "data": [int(n) for _, n in top_screens],
+        },
+    ]
+
+    banner = ""
+    if span_days < 3:
+        banner = (
+            "<div class='banner'>📈 The events pipeline started flowing "
+            f"~{span_days:.1f} days ago — {total_events} events so far. Numbers "
+            "are real but <strong>still filling in</strong>; don't read a trend "
+            "into a partial day yet.</div>"
+        )
+
+    plat_rows = "".join(
+        f"<tr><td>{p or '—'}</td><td>{v or '—'}</td><td>{int(n)}</td></tr>"
+        for p, v, n in platforms
+    )
+    funnel_html = (
+        "<p class='muted'>Funnel not configured yet — pick the ordered steps "
+        "(se_action) from the Top Events list above, then set "
+        "<code>FUNNEL_STEPS</code> in events_repo. TODO(Rishi).</p>"
+        if not events_repo.FUNNEL_STEPS
+        else "<p class='muted'>(funnel configured — render TBD)</p>"
+    )
+
+    body = f"""
+{banner}
+<h1>Product analytics</h1>
+
+<div class="tiles">
+  <div class="tile"><div class="label">Daily active users</div><div class="big">{active["dau"]}</div></div>
+  <div class="tile"><div class="label">Weekly active</div><div class="big">{active["wau"]}</div></div>
+  <div class="tile"><div class="label">Monthly active</div><div class="big">{active["mau"]}</div> <small>n={active["mau"]}</small></div>
+  <div class="tile"><div class="label">Stickiness (DAU/MAU)</div><div class="big">{_pct(active["stickiness"])}</div></div>
+</div>
+
+<div class="grid2">
+  <div class="card"><h2>Active users (30d)</h2><canvas id="dau"></canvas></div>
+  <div class="card"><h2>Event volume (30d)</h2><canvas id="vol"></canvas></div>
+  <div class="card"><h2>Top events (7d)</h2><canvas id="topev"></canvas></div>
+  <div class="card"><h2>Top screens (7d)</h2><canvas id="screens"></canvas></div>
+</div>
+
+<div class="card"><h2>By platform &amp; app version (7d)</h2>
+  <table><thead><tr><th>Platform</th><th>App version</th><th>Events</th></tr></thead>
+  <tbody>{plat_rows or "<tr><td colspan=3 class='muted'>no data</td></tr>"}</tbody></table>
+</div>
+
+<div class="card"><h2>Funnel</h2>{funnel_html}</div>
+
+<script src="{_CHART_JS}"></script>
+<script>
+const CHARTS = {json.dumps(charts)};
+for (const c of CHARTS) {{
+  new Chart(document.getElementById(c.id), {{
+    type: c.type,
+    data: {{ labels: c.labels, datasets: [{{ label: c.label, data: c.data,
+      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.5)', tension: 0.2 }}] }},
+    options: {{ plugins: {{ legend: {{ display: false }} }},
+      indexAxis: c.type === 'bar' ? 'y' : 'x',
+      scales: {{ x: {{ grid: {{ display: false }} }} }} }}
+  }});
+}}
+</script>
+"""
+    return _shell(body)
+
+
+def _shell(body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics — product</title>
+<style>
+  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 1.5rem;
+         color: #1a1a1a; max-width: 60rem; }}
+  h1 {{ font-size: 1.4rem; }} h2 {{ font-size: 0.95rem; color: #444; }}
+  .banner {{ background: #fff8e1; border: 1px solid #ffe082; border-radius: 10px;
+            padding: 0.75rem 1rem; font-size: 0.9rem; margin-bottom: 1rem; }}
+  .tiles {{ display: grid; grid-template-columns: repeat(auto-fit,minmax(8rem,1fr));
+           gap: 0.75rem; }}
+  .tile {{ border: 1px solid #eee; border-radius: 12px; padding: 1rem; }}
+  .label {{ color: #666; font-size: 0.8rem; }} .big {{ font-size: 1.8rem; font-weight: 600; }}
+  small {{ color: #999; }}
+  .grid2 {{ display: grid; grid-template-columns: repeat(auto-fit,minmax(18rem,1fr));
+           gap: 1rem; margin-top: 1rem; }}
+  .card {{ border: 1px solid #eee; border-radius: 12px; padding: 1rem; margin-top: 1rem; }}
+  table {{ border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }}
+  th, td {{ border-bottom: 1px solid #f0f0f0; padding: 0.4rem 0.6rem; text-align: left; }}
+  .muted {{ color: #999; font-size: 0.85rem; }}
+  code {{ background: #f4f4f4; padding: 0 0.25rem; border-radius: 4px; }}
+</style></head><body>
+{body}
+</body></html>"""

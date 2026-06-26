@@ -5,9 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 import auth
+import clickhouse
 import config
 import database
 from repositories import login_audit_repo
+from routes.events import router as events_router
 from routes.headline import router as headline_router
 from routes.health import router as health_router
 from routes.retention import router as retention_router
@@ -97,6 +99,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await database.close_pool()
+    await clickhouse.close_client()
     logger.info("Shutdown complete")
 
 
@@ -123,6 +126,7 @@ if _session_secret:
 app.include_router(health_router)
 app.include_router(headline_router)
 app.include_router(retention_router)
+app.include_router(events_router)
 
 # Google login routes mount only when the OAuth client + secret are provisioned;
 # until then /headline falls back to the temp token (auth.require_dashboard_access).

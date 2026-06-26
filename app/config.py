@@ -160,10 +160,21 @@ KAFKA_POLL_TIMEOUT_MS = _env_int("KAFKA_POLL_TIMEOUT_MS", 5000)
 CLICKHOUSE_DSN = _secret("CLICKHOUSE_DSN")
 CLICKHOUSE_DATABASE = _env("CLICKHOUSE_DATABASE", "analytics")
 
+# The DASHBOARD service reads ClickHouse through the analytics_reader (read-only)
+# user — its own DSN, separate from the consumer's write DSN. The secret mounts
+# as /run/secrets/analytics_clickhouse_reader_dsn; clickhouse.py reads that file
+# first, this env var is the local/dev fallback.
+CLICKHOUSE_READER_DSN = _env("CLICKHOUSE_READER_DSN")
+
 # Batch the inserts — ClickHouse hates row-by-row ("too many parts"). Flush on
 # whichever comes first. Commit to the bridge only AFTER the insert succeeds.
 EVENTS_BATCH_SIZE = _env_int("EVENTS_BATCH_SIZE", 1000)
 EVENTS_BATCH_SECONDS = _env_int("EVENTS_BATCH_SECONDS", 5)
+
+# Hard cap on the in-memory buffer. If ClickHouse is down, stop pulling from the
+# bridge (offsets stay uncommitted → the bridge holds the backlog) instead of
+# growing unbounded and OOMing — backpressure, not data loss (gotcha #7).
+EVENTS_MAX_BUFFER = _env_int("EVENTS_MAX_BUFFER", 20000)
 
 # Sentry for parse/insert errors (optional; empty → disabled).
 SENTRY_DSN = _secret("SENTRY_DSN")
