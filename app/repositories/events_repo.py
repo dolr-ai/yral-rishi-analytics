@@ -14,15 +14,16 @@ import config
 
 _DB = config.CLICKHOUSE_DATABASE
 
-# Active-user identity: the business user_id when present (in the JSON), else
-# the device-level domain_userid (always populated on mobile).
-_USER = "coalesce(nullIf(JSONExtractString(event, 'user_id'), ''), domain_userid)"
-
-# Mobile self-describing contexts (each a 1-element array in the JSON).
-_SCREEN = (
+# Active-user identity = user_id (domain_userid is non-granular — a single value
+# across the whole dataset). Fall back to the client_session context's userId
+# for events fired before login.
+_USER = (
+    "coalesce(nullIf(JSONExtractString(event, 'user_id'), ''), "
     "JSONExtractString(event, "
-    "'contexts_com_snowplowanalytics_mobile_screen_1', 1, 'name')"
+    "'contexts_com_snowplowanalytics_mobile_client_session_1', 1, 'userId'))"
 )
+
+# Mobile self-describing context (1-element array in the JSON).
 _APP_VERSION = (
     "JSONExtractString(event, "
     "'contexts_com_snowplowanalytics_mobile_application_1', 1, 'version')"
@@ -95,15 +96,18 @@ async def top_events(client, limit: int = 20) -> list[tuple]:
     )
 
 
-async def top_screens(client, limit: int = 20) -> list[tuple]:
-    """(screen name, count) from the mobile_screen context, last 7 days."""
+async def top_views(client, limit: int = 20) -> list[tuple]:
+    """(view name, count) for the *_viewed se_actions, last 7 days. The
+    mobile_screen context is MainActivity-only (useless), so the `_viewed`
+    events are the real screen/view signal."""
     return await _rows(
         client,
         f"""
-        SELECT {_SCREEN} AS screen, count() AS n
+        SELECT JSONExtractString(event, 'se_action') AS view, count() AS n
         FROM {_DB}.raw_events
-        WHERE collector_tstamp >= now() - INTERVAL 7 DAY AND {_SCREEN} != ''
-        GROUP BY screen ORDER BY n DESC LIMIT {int(limit)}
+        WHERE collector_tstamp >= now() - INTERVAL 7 DAY
+          AND endsWith(JSONExtractString(event, 'se_action'), '_viewed')
+        GROUP BY view ORDER BY n DESC LIMIT {int(limit)}
         """,
     )
 
@@ -135,10 +139,14 @@ async def data_span_days(client) -> float:
 
 
 # ── Funnel (configurable) ────────────────────────────────────────────────
-# TODO(Rishi): pick the ordered se_action steps once you've seen the Top Events
-# list. Leave empty until then — the route shows a "configure me" placeholder.
-# Example once chosen: ["app_open", "discover_view", "chat_open", "message_sent"]
-FUNNEL_STEPS: list[str] = []
+# The core product funnel (Rishi, 2026-06-26): land → browse bots → start a
+# chat → send the first message. Conversion + per-step drop-off is the headline.
+FUNNEL_STEPS: list[str] = [
+    "home_page_viewed",
+    "influencer_cards_viewed",
+    "chat_session_started",
+    "user_message_sent",
+]
 
 
 async def funnel(client, steps: list[str], window_days: int = 7) -> list[dict]:

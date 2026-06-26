@@ -26,6 +26,32 @@ def _pct(x: float | None) -> str:
     return f"{x * 100:.0f}%" if x is not None else "—"
 
 
+def _funnel_html(funnel: list[dict]) -> str:
+    # Conversion (vs the first step) + per-step drop-off — the headline view.
+    if not funnel:
+        return "<p class='muted'>No funnel data in the window yet.</p>"
+    base = funnel[0]["users"] or 0
+    rows, prev = [], None
+    for f in funnel:
+        drop = (
+            "—"
+            if prev is None or not prev
+            else f"−{(prev - f['users']) / prev * 100:.0f}%"
+        )
+        rows.append(
+            f"<tr><td>{f['step']}</td><td>{f['users']}</td>"
+            f"<td>{_pct(f['conversion'])}</td><td>{drop}</td></tr>"
+        )
+        prev = f["users"]
+    overall = _pct(funnel[-1]["conversion"])
+    return (
+        f"<div class='big'>{overall}</div><div class='label'>"
+        f"{funnel[0]['step']} → {funnel[-1]['step']} &nbsp;(n={base})</div>"
+        "<table><thead><tr><th>Step</th><th>Users</th><th>vs start</th>"
+        "<th>Drop-off</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+    )
+
+
 @router.get("/events", response_class=HTMLResponse)
 async def events(_access: str = Depends(require_dashboard_access)) -> str:
     client = await clickhouse.get_client()
@@ -34,9 +60,10 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
         dau = await events_repo.dau_trend(client)
         volume = await events_repo.event_volume(client)
         top_events = await events_repo.top_events(client)
-        top_screens = await events_repo.top_screens(client)
+        top_views = await events_repo.top_views(client)
         platforms = await events_repo.platform_breakdown(client)
         span_days = await events_repo.data_span_days(client)
+        funnel = await events_repo.funnel(client, events_repo.FUNNEL_STEPS)
     except Exception:
         # raw_events not there yet / no reader access yet — warming up, not 500.
         return _shell("<p>Events are still warming up — check back shortly.</p>")
@@ -66,11 +93,11 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
             "data": [int(n) for _, _, n in top_events],
         },
         {
-            "id": "screens",
+            "id": "views",
             "type": "bar",
-            "label": "Screen views (7d)",
-            "labels": [s for s, _ in top_screens],
-            "data": [int(n) for _, n in top_screens],
+            "label": "Views (7d)",
+            "labels": [s for s, _ in top_views],
+            "data": [int(n) for _, n in top_views],
         },
     ]
 
@@ -87,13 +114,17 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
         f"<tr><td>{p or '—'}</td><td>{v or '—'}</td><td>{int(n)}</td></tr>"
         for p, v, n in platforms
     )
-    funnel_html = (
-        "<p class='muted'>Funnel not configured yet — pick the ordered steps "
-        "(se_action) from the Top Events list above, then set "
-        "<code>FUNNEL_STEPS</code> in events_repo. TODO(Rishi).</p>"
-        if not events_repo.FUNNEL_STEPS
-        else "<p class='muted'>(funnel configured — render TBD)</p>"
-    )
+    if funnel:
+        charts.append(
+            {
+                "id": "funnel",
+                "type": "bar",
+                "label": "Users",
+                "labels": [f["step"] for f in funnel],
+                "data": [int(f["users"]) for f in funnel],
+            }
+        )
+    funnel_html = _funnel_html(funnel)
 
     body = f"""
 {banner}
@@ -110,7 +141,7 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
   <div class="card"><h2>Active users (30d)</h2><canvas id="dau"></canvas></div>
   <div class="card"><h2>Event volume (30d)</h2><canvas id="vol"></canvas></div>
   <div class="card"><h2>Top events (7d)</h2><canvas id="topev"></canvas></div>
-  <div class="card"><h2>Top screens (7d)</h2><canvas id="screens"></canvas></div>
+  <div class="card"><h2>Top views (7d)</h2><canvas id="views"></canvas></div>
 </div>
 
 <div class="card"><h2>By platform &amp; app version (7d)</h2>
@@ -118,7 +149,10 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
   <tbody>{plat_rows or "<tr><td colspan=3 class='muted'>no data</td></tr>"}</tbody></table>
 </div>
 
-<div class="card"><h2>Funnel</h2>{funnel_html}</div>
+<div class="card"><h2>Funnel — home → first message</h2>
+  {('<canvas id="funnel"></canvas>' if funnel else "")}
+  {funnel_html}
+</div>
 
 <script src="{_CHART_JS}"></script>
 <script>

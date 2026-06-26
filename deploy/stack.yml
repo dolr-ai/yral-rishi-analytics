@@ -56,11 +56,13 @@ services:
       # by the hourly refresh job to write the analytics-schema summary. While
       # absent, the refresher stays dormant (no leader contact at all).
       - analytics_db_dsn_rw
-      # Google OAuth client secret — added at Phase B by Rishi, out-of-band.
-      - analytics_google_oauth_client_secret
-      # Signs the short-lived OAuth-handshake cookie (SessionMiddleware). Must be
-      # stable + shared across workers; generate a random value, Phase B.
-      - analytics_session_secret
+      # Google OAuth client secret — the rotated v3 is the live one; mount it
+      # at the original target the app reads (/run/secrets/...client_secret).
+      - source: analytics_google_oauth_client_secret_v3
+        target: analytics_google_oauth_client_secret
+      # OAuth-handshake cookie signer (SessionMiddleware) — rotated v2 is live.
+      - source: analytics_session_secret_v2
+        target: analytics_session_secret
       # Redis AUTH password — this cluster's Sentinel + master require it, or
       # Google sessions can't be stored. The existing cluster secret is mounted
       # under the UPPER_CASE target the app reads (/run/secrets/REDIS_PASSWORD).
@@ -116,9 +118,9 @@ secrets:
     external: true
   analytics_db_dsn_rw:
     external: true
-  analytics_google_oauth_client_secret:
+  analytics_google_oauth_client_secret_v3:
     external: true
-  analytics_session_secret:
+  analytics_session_secret_v2:
     external: true
   yral_v2_redis_primary_password_ceeb8b19:
     external: true
