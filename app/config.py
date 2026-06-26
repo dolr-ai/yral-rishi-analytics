@@ -139,3 +139,31 @@ SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", True)
 # comes from a Swarm secret; read as a file first (see auth.py). Auth stays
 # dormant until this exists.
 SESSION_SECRET = _env("SESSION_SECRET")
+
+# ── analytics-events-consumer (separate Swarm service) ────────────────────
+# Strimzi Kafka HTTP bridge → Snowplow enriched events → ClickHouse. The
+# consumer is its own process (consumer_main.py), not the dashboard app.
+
+# Bridge (Strimzi HTTP REST). The bearer token comes from Vault via OIDC in CI
+# and is mounted as a Swarm secret (file-first). Consumer-group prefix MUST be
+# `bridge-` (ACL). auto.offset.reset=latest for prod (skip the backlog).
+KAFKA_BRIDGE_URL = _env("KAFKA_BRIDGE_URL", "https://kafka-bridge.yral.com")
+KAFKA_BRIDGE_TOKEN = _secret("KAFKA_BRIDGE_TOKEN")
+KAFKA_CONSUMER_GROUP = _env("KAFKA_CONSUMER_GROUP", "bridge-yral-rishi-analytics")
+KAFKA_TOPIC = _env("KAFKA_TOPIC", "snowplow-enriched")
+KAFKA_AUTO_OFFSET_RESET = _env("KAFKA_AUTO_OFFSET_RESET", "latest")
+# Aligned with the flush cadence so the loop wakes ~every batch window.
+KAFKA_POLL_TIMEOUT_MS = _env_int("KAFKA_POLL_TIMEOUT_MS", 5000)
+
+# ClickHouse sink. DSN (clickhouse://user:pass@host:port/db) for the
+# analytics_consumer WRITE user — a Swarm secret, file-first.
+CLICKHOUSE_DSN = _secret("CLICKHOUSE_DSN")
+CLICKHOUSE_DATABASE = _env("CLICKHOUSE_DATABASE", "analytics")
+
+# Batch the inserts — ClickHouse hates row-by-row ("too many parts"). Flush on
+# whichever comes first. Commit to the bridge only AFTER the insert succeeds.
+EVENTS_BATCH_SIZE = _env_int("EVENTS_BATCH_SIZE", 1000)
+EVENTS_BATCH_SECONDS = _env_int("EVENTS_BATCH_SECONDS", 5)
+
+# Sentry for parse/insert errors (optional; empty → disabled).
+SENTRY_DSN = _secret("SENTRY_DSN")

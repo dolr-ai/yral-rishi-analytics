@@ -1,0 +1,80 @@
+# ── analytics-events-consumer — Docker Swarm deploy spec ──────────────────
+#
+# Separate Swarm service from the dashboard, SAME image (different command):
+# the dashboard runs `uvicorn main:app`, this runs `uvicorn consumer_main:app`.
+# v1 = 1 replica (the Strimzi bridge is a single in-memory replica; the consumer
+# GROUP gives at-least-once + resume-on-recreate, so one reader is enough for v1
+# — revisit HA against the bridge model later). On yral-v2-data-plane to reach
+# ClickHouse (internal) + egress to kafka-bridge.yral.com.
+#
+# NOT deployed by this file alone. The coordinator: builds/pushes the image,
+# creates the ClickHouse analytics_consumer user + its DSN secret, injects the
+# Vault bridge token as a Swarm secret (deploy CI), then `docker stack deploy`.
+
+version: "3.9"
+
+services:
+
+  events-consumer:
+    image: ${IMAGE_REPO:-ghcr.io/dolr-ai/yral-rishi-analytics}:${IMAGE_TAG:-stable}
+    hostname: analytics-events-consumer
+    command:
+      ["uvicorn", "consumer_main:app", "--host", "0.0.0.0", "--port", "8002"]
+    networks:
+      # reach ClickHouse (service name on the overlay) + egress to the bridge.
+      - yral-v2-data-plane
+    environment:
+      KAFKA_BRIDGE_URL: ${KAFKA_BRIDGE_URL:-https://kafka-bridge.yral.com}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-bridge-yral-rishi-analytics}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-snowplow-enriched}
+      KAFKA_AUTO_OFFSET_RESET: ${KAFKA_AUTO_OFFSET_RESET:-latest}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-analytics}
+      EVENTS_BATCH_SIZE: ${EVENTS_BATCH_SIZE:-1000}
+      EVENTS_BATCH_SECONDS: ${EVENTS_BATCH_SECONDS:-5}
+    secrets:
+      # Bridge bearer token — Vault OIDC → Swarm secret (deploy CI). Mounted at
+      # the UPPER_CASE target the app reads (/run/secrets/KAFKA_BRIDGE_TOKEN).
+      - source: kafka_bridge_token
+        target: KAFKA_BRIDGE_TOKEN
+      # clickhouse://analytics_consumer:<pw>@yral-analytics-clickhouse:8123/analytics
+      - source: analytics_clickhouse_consumer_dsn
+        target: CLICKHOUSE_DSN
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        # Co-located with ClickHouse (rishi-6) — the insert path is the hot one.
+        constraints: [node.hostname == rishi-6]
+      resources:
+        # Async I/O-bound; the buffer + Python runtime are the footprint.
+        limits:   { cpus: "1.0", memory: 512M }
+        reservations: { cpus: "0.1", memory: 128M }
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 5
+      update_config:
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        order: start-first
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8002/health',timeout=5).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+secrets:
+  kafka_bridge_token:
+    external: true
+  analytics_clickhouse_consumer_dsn:
+    external: true
+
+networks:
+  yral-v2-data-plane:
+    external: true

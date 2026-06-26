@@ -3,6 +3,27 @@
 The checklist. Status: ✅ Done · ⏳ Pending · 🔄 In PR · 🔒 Gated on Rishi.
 Phases mirror the design doc (`analytics-100x-vision.md` §9).
 
+## Real-time events pipeline — analytics-events-consumer (2026-06-26, PR #10)
+Mobile → Saikat's Strimzi Kafka **bridge** → OUR consumer → OUR ClickHouse.
+A separate Swarm service (same image, `uvicorn consumer_main:app`).
+| Piece | Status |
+|---|---|
+| `services/kafka_bridge.py` — httpx Strimzi client (create/subscribe/poll/commit; public-base URLs; 404→recreate) | 🔄 In PR (validated vs mock transport) |
+| `services/snowplow.py` — enriched-TSV parse (snowplow_analytics_sdk) → typed cols + JSON | 🔄 In PR (validated) |
+| `services/clickhouse_sink.py` — `raw_events` ReplacingMergeTree + batched insert | 🔄 In PR (schema+dedup validated via chdb) |
+| `consumer_main.py` — poll→parse→batch(1000/5s)→insert→**commit-after-write**; `/health`; Sentry | 🔄 In PR (loop + insert-before-commit validated) |
+| `deploy/events-consumer-stack.yml` (1 replica, data-plane, rishi-6, secrets) | 🔄 In PR |
+| `.github/workflows/deploy-events-consumer.yml` — Vault-OIDC token → Swarm secret | 🔄 In PR |
+| ClickHouse `analytics_consumer` write user + DSN secret | 🔒 Coordinator (on deploy) |
+| Build/push image + `docker stack deploy` + CH-user create | 🔒 Coordinator |
+
+> **Not validated locally (no runnable CH server on this box):** the
+> clickhouse-connect async **insert against a live server** (marshaling
+> datetime/Nullable/String). Schema + dedup proven via chdb; live insert is
+> confirmed by the coordinator against prod ClickHouse on deploy. JSON stored as
+> `String` (CH 24.3 has no stable JSON type) — query via `JSONExtract*`.
+
+
 ## Phase 0 — Stand up the service skeleton
 | Item | Status |
 |---|---|

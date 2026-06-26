@@ -1,0 +1,54 @@
+name: deploy-events-consumer
+
+# Injects the Strimzi bridge bearer token (Vault, CI-OIDC-only) as a Swarm
+# secret on rishi-6 so the events-consumer can read it. The token cannot be
+# fetched outside CI, so this IS the injection path. Manual trigger — the
+# coordinator runs it, then deploys the stack + creates the ClickHouse
+# analytics_consumer user + its DSN secret (deploy/events-consumer-stack.yml).
+#
+# Requires repo secrets (coordinator wires these):
+#   RISHI6_SSH_KEY  — the rishi-hetzner-ci deploy key (rishi-deploy@rishi-6)
+#   RISHI6_HOST     — rishi-6 host/IP
+# The Vault role/policy + shared-secret grant already exist (see the
+# kafka-probe workflow, which proved this exact vault-action step).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inject-bridge-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch bridge token from Vault (OIDC)
+        uses: hashicorp/vault-action@v3
+        with:
+          url: https://vault.yral.com
+          method: jwt
+          role: yral-rishi-analytics-role
+          jwtGithubAudience: https://github.com/dolr-ai
+          secrets: |
+            secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN value | KAFKA_TOKEN
+
+      - name: Create kafka_bridge_token Swarm secret on rishi-6
+        env:
+          SSH_KEY: ${{ secrets.RISHI6_SSH_KEY }}
+          SSH_HOST: ${{ secrets.RISHI6_HOST }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/stdin "$HOME/ci_key" <<< "$SSH_KEY"
+          SSH="ssh -i $HOME/ci_key -o StrictHostKeyChecking=accept-new rishi-deploy@$SSH_HOST"
+          # Create only if absent — Swarm secrets are immutable; rotation is a
+          # versioned-secret swap on the service (coordinator), like the OAuth
+          # secret. The token is piped over stdin → never in argv or logs (and
+          # GitHub masks the Vault value).
+          if $SSH 'docker secret inspect kafka_bridge_token >/dev/null 2>&1'; then
+            echo "kafka_bridge_token already exists — leaving it (rotate via versioned swap)."
+          else
+            printf '%s' "$KAFKA_TOKEN" | $SSH 'docker secret create kafka_bridge_token -' >/dev/null
+            echo "kafka_bridge_token created."
+          fi
+          rm -f "$HOME/ci_key"
