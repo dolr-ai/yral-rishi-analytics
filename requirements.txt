@@ -5,3 +5,7 @@ redis==5.2.1
 authlib==1.3.2
 httpx==0.28.1
 itsdangerous==2.2.0
+snowplow-analytics-sdk==0.2.3
+clickhouse-connect==1.3.0
+aiohttp==3.11.11
+sentry-sdk==2.63.0
