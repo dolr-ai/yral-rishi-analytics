@@ -246,6 +246,74 @@ async def event_retention(client, weeks_back: int = 8) -> list[tuple]:
     )
 
 
+async def wow(client) -> dict:
+    """Week-over-week: active users + events, this 7d vs the prior 7d, with %
+    change. The honest 'are we growing' read once a couple of weeks exist."""
+    row = (
+        await _rows(
+            client,
+            f"""
+        SELECT
+            uniqExactIf(u, ts >= now() - INTERVAL 7 DAY)  AS u_this,
+            uniqExactIf(u, ts <  now() - INTERVAL 7 DAY)  AS u_last,
+            countIf(ts >= now() - INTERVAL 7 DAY)         AS e_this,
+            countIf(ts <  now() - INTERVAL 7 DAY)         AS e_last
+        FROM (
+            SELECT {_USER} AS u, collector_tstamp AS ts
+            FROM {_DB}.raw_events WHERE collector_tstamp >= now() - INTERVAL 14 DAY
+        )
+        """,
+        )
+    )[0]
+    u_this, u_last, e_this, e_last = row
+
+    def delta(this, last):
+        return ((this - last) / last) if last else None
+
+    return {
+        "users_this": u_this,
+        "users_last": u_last,
+        "users_delta": delta(u_this, u_last),
+        "events_this": e_this,
+        "events_last": e_last,
+        "events_delta": delta(e_this, e_last),
+    }
+
+
+async def events_by_action(client, limit: int = 20) -> list[tuple]:
+    """Breakdown by event-type (se_action) across ALL events, last 7 days."""
+    return await _rows(
+        client,
+        f"""
+        SELECT JSONExtractString(event, 'se_action') AS action, count() AS n
+        FROM {_DB}.raw_events
+        WHERE collector_tstamp >= now() - INTERVAL 7 DAY
+          AND JSONExtractString(event, 'se_action') != ''
+        GROUP BY action ORDER BY n DESC LIMIT {int(limit)}
+        """,
+    )
+
+
+async def recent_activity(client) -> dict:
+    """Last-15-min + last-hour event counts and 15-min active users — for the
+    auto-refreshing 'is it alive right now' tile."""
+    row = (
+        await _rows(
+            client,
+            f"""
+        SELECT countIf(ts >= now() - INTERVAL 15 MINUTE)         AS e15,
+               countIf(ts >= now() - INTERVAL 60 MINUTE)         AS e60,
+               uniqExactIf(u, ts >= now() - INTERVAL 15 MINUTE)  AS u15
+        FROM (
+            SELECT {_USER} AS u, collector_tstamp AS ts
+            FROM {_DB}.raw_events WHERE collector_tstamp >= now() - INTERVAL 60 MINUTE
+        )
+        """,
+        )
+    )[0]
+    return {"events_15m": row[0], "events_60m": row[1], "users_15m": row[2]}
+
+
 # ── Funnel (configurable) ────────────────────────────────────────────────
 # The core product funnel (Rishi, 2026-06-26): land → browse bots → start a
 # chat → send the first message. Conversion + per-step drop-off is the headline.

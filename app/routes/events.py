@@ -27,6 +27,14 @@ def _pct(x: float | None) -> str:
     return f"{x * 100:.0f}%" if x is not None else "—"
 
 
+def _delta(x: float | None) -> str:
+    # WoW change badge; green up / red down, blank when there's no prior week.
+    if x is None:
+        return ""
+    sign, cls = ("+", "up") if x >= 0 else ("−", "down")
+    return f" <span class='delta {cls}'>{sign}{abs(x) * 100:.0f}% WoW</span>"
+
+
 def _funnel_html(funnel: list[dict]) -> str:
     # Conversion (vs the first step) + per-step drop-off — the headline view.
     if not funnel:
@@ -121,6 +129,9 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
         depth = await events_repo.message_depth(client)
         returning = await events_repo.returning_user_rate(client)
         retention = await events_repo.event_retention(client)
+        wow = await events_repo.wow(client)
+        by_action = await events_repo.events_by_action(client)
+        recent = await events_repo.recent_activity(client)
     except Exception:
         # raw_events not there yet / no reader access yet — warming up, not 500.
         return _shell("<p>Events are still warming up — check back shortly.</p>")
@@ -155,6 +166,13 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
             "label": "Views (7d)",
             "labels": [s for s, _ in top_views],
             "data": [int(n) for _, n in top_views],
+        },
+        {
+            "id": "byaction",
+            "type": "bar",
+            "label": "Events by type (7d)",
+            "labels": [a for a, _ in by_action],
+            "data": [int(n) for _, n in by_action],
         },
     ]
 
@@ -210,6 +228,11 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
 
 <div class="card pmf"><h2>PMF glance</h2>{glance}</div>
 
+<div class="card recent"><h2>Right now</h2>
+  <div id="recent" class="big">{recent["events_15m"]} events · {recent["users_15m"]} users <small>last 15 min</small></div>
+  <div class="muted">{recent["events_60m"]} in the last hour · auto-refreshes every 30s</div>
+</div>
+
 <div class="tiles">
   <div class="tile"><div class="label">Daily active users</div><div class="big">{active["dau"]}</div></div>
   <div class="tile"><div class="label">Weekly active</div><div class="big">{active["wau"]}</div></div>
@@ -218,10 +241,11 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
 </div>
 
 <div class="grid2">
-  <div class="card"><h2>Active users (30d)</h2><canvas id="dau"></canvas></div>
-  <div class="card"><h2>Event volume (30d)</h2><canvas id="vol"></canvas></div>
+  <div class="card"><h2>Active users (30d){_delta(wow["users_delta"])}</h2><canvas id="dau"></canvas></div>
+  <div class="card"><h2>Event volume (30d){_delta(wow["events_delta"])}</h2><canvas id="vol"></canvas></div>
   <div class="card"><h2>Top events (7d)</h2><canvas id="topev"></canvas></div>
   <div class="card"><h2>Top views (7d)</h2><canvas id="views"></canvas></div>
+  <div class="card"><h2>Events by type (7d)</h2><canvas id="byaction"></canvas></div>
 </div>
 
 <div class="card"><h2>By platform &amp; app version (7d)</h2>
@@ -256,9 +280,27 @@ for (const c of CHARTS) {{
       scales: {{ x: {{ grid: {{ display: false }} }} }} }}
   }});
 }}
+async function refreshRecent() {{
+  try {{
+    const r = await (await fetch('/events/recent')).json();
+    document.getElementById('recent').innerHTML =
+      `${{r.events_15m}} events · ${{r.users_15m}} users <small>last 15 min</small>`;
+  }} catch (e) {{}}
+}}
+setInterval(refreshRecent, 30000);
 </script>
 """
     return _shell(body)
+
+
+@router.get("/events/recent")
+async def events_recent(_access: str = Depends(require_dashboard_access)):
+    # Lightweight JSON for the auto-refreshing "Right now" tile.
+    client = await clickhouse.get_client()
+    try:
+        return await events_repo.recent_activity(client)
+    except Exception:
+        return {"events_15m": 0, "events_60m": 0, "users_15m": 0}
 
 
 def _shell(body: str) -> str:
@@ -290,6 +332,10 @@ def _shell(body: str) -> str:
   .gtile .sub {{ color: #888; font-size: 0.8rem; }}
   .rowhead {{ font-weight: 600; color: #444; }}
   tr.faint td, tr.faint .rowhead {{ opacity: 0.45; }}
+  .delta {{ font-size: 0.75rem; font-weight: 500; }}
+  .delta.up {{ color: #16a34a; }} .delta.down {{ color: #dc2626; }}
+  .recent {{ background: #f6fff8; }}
+  h2 {{ font-weight: 600; }}
 </style></head><body>
 {body}
 </body></html>"""
