@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 
 import clickhouse
+import config
 from auth import require_dashboard_access
 from repositories import events_repo
 
@@ -52,6 +53,58 @@ def _funnel_html(funnel: list[dict]) -> str:
     )
 
 
+def _influencer_html(influencers: list[tuple]) -> str:
+    if not influencers:
+        return (
+            "<p class='muted'>No influencer id found on the chat events "
+            "(checked se_label / se_property). Confirm the field, then update "
+            "<code>_INFLUENCER</code> in events_repo.</p>"
+        )
+    rows = "".join(
+        f"<tr><td>{i}</td><td>{int(ch)}</td><td>{int(m)}</td><td>{int(u)}</td></tr>"
+        for i, ch, m, u in influencers
+    )
+    return (
+        "<table><thead><tr><th>Influencer</th><th>Chats</th><th>Messages</th>"
+        f"<th>Users</th></tr></thead><tbody>{rows}</tbody></table>"
+    )
+
+
+def _retention_html(retention: list[tuple]) -> str:
+    # PostHog-style weekly cohort grid; a row flattening above zero is the tell.
+    if not retention:
+        return "<p class='muted'>No cohorts yet.</p>"
+    cohorts: dict[str, dict] = {}
+    for wk, sz, off, users in retention:
+        c = cohorts.setdefault(str(wk), {"size": int(sz), "cells": {}})
+        if off is not None:
+            c["cells"][int(off)] = int(users)
+    max_col = min(
+        8, max((max(c["cells"], default=0) for c in cohorts.values()), default=0)
+    )
+    header = "".join(f"<th>W{k}</th>" for k in range(max_col + 1))
+    body = []
+    for wk in sorted(cohorts, reverse=True):
+        c = cohorts[wk]
+        sz = c["size"]
+        faint = " class='faint'" if sz < config.SMALL_SAMPLE_THRESHOLD else ""
+        tds = []
+        for k in range(max_col + 1):
+            if k in c["cells"]:
+                pct = round(100 * c["cells"][k] / sz) if sz else 0
+                tds.append(f"<td>{pct}%<br><small>{c['cells'][k]}</small></td>")
+            else:
+                tds.append("<td class='muted'>·</td>")
+        body.append(
+            f"<tr{faint}><th class='rowhead'>{wk}<br><small>n={sz}</small></th>"
+            f"{''.join(tds)}</tr>"
+        )
+    return (
+        "<table><thead><tr><th class='rowhead'>Cohort (first-seen week)</th>"
+        f"{header}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+    )
+
+
 @router.get("/events", response_class=HTMLResponse)
 async def events(_access: str = Depends(require_dashboard_access)) -> str:
     client = await clickhouse.get_client()
@@ -64,6 +117,10 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
         platforms = await events_repo.platform_breakdown(client)
         span_days = await events_repo.data_span_days(client)
         funnel = await events_repo.funnel(client, events_repo.FUNNEL_STEPS)
+        influencers = await events_repo.influencer_engagement(client)
+        depth = await events_repo.message_depth(client)
+        returning = await events_repo.returning_user_rate(client)
+        retention = await events_repo.event_retention(client)
     except Exception:
         # raw_events not there yet / no reader access yet — warming up, not 500.
         return _shell("<p>Events are still warming up — check back shortly.</p>")
@@ -125,10 +182,33 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
             }
         )
     funnel_html = _funnel_html(funnel)
+    if depth:
+        charts.append(
+            {
+                "id": "depth",
+                "type": "bar",
+                "label": "Users",
+                "labels": [b for b, _ in depth],
+                "data": [int(u) for _, u in depth],
+            }
+        )
+
+    funnel_conv = _pct(funnel[-1]["conversion"]) if funnel else "—"
+    glance = f"""
+<div class="glance">
+  <div class="gtile"><div class="label">Funnel conversion</div><div class="huge">{funnel_conv}</div>
+    <div class="sub">home → first message</div></div>
+  <div class="gtile"><div class="label">Stickiness</div><div class="huge">{_pct(active["stickiness"])}</div>
+    <div class="sub">DAU / MAU</div></div>
+  <div class="gtile"><div class="label">Returning users</div><div class="huge">{_pct(returning["rate"])}</div>
+    <div class="sub">seen on &gt;1 day &nbsp;<small>n={returning["n"]}</small></div></div>
+</div>"""
 
     body = f"""
 {banner}
 <h1>Product analytics</h1>
+
+<div class="card pmf"><h2>PMF glance</h2>{glance}</div>
 
 <div class="tiles">
   <div class="tile"><div class="label">Daily active users</div><div class="big">{active["dau"]}</div></div>
@@ -152,6 +232,15 @@ async def events(_access: str = Depends(require_dashboard_access)) -> str:
 <div class="card"><h2>Funnel — home → first message</h2>
   {('<canvas id="funnel"></canvas>' if funnel else "")}
   {funnel_html}
+</div>
+
+<div class="card"><h2>Which bots create love (30d)</h2>{_influencer_html(influencers)}</div>
+
+<div class="card"><h2>New-user weekly retention</h2>{_retention_html(retention)}</div>
+
+<div class="card"><h2>Engagement depth — messages / user</h2>
+  {('<canvas id="depth"></canvas>' if depth else "<p class='muted'>no messages yet</p>")}
+  <p class='muted'>How many users sent 1 / 2-5 / 6-20 / 21+ messages — the power-user curve.</p>
 </div>
 
 <script src="{_CHART_JS}"></script>
@@ -195,6 +284,12 @@ def _shell(body: str) -> str:
   th, td {{ border-bottom: 1px solid #f0f0f0; padding: 0.4rem 0.6rem; text-align: left; }}
   .muted {{ color: #999; font-size: 0.85rem; }}
   code {{ background: #f4f4f4; padding: 0 0.25rem; border-radius: 4px; }}
+  .pmf {{ background: #f7faff; }}
+  .glance {{ display: grid; grid-template-columns: repeat(auto-fit,minmax(10rem,1fr)); gap: 1rem; }}
+  .gtile .huge {{ font-size: 2.4rem; font-weight: 700; color: #1d4ed8; line-height: 1.1; }}
+  .gtile .sub {{ color: #888; font-size: 0.8rem; }}
+  .rowhead {{ font-weight: 600; color: #444; }}
+  tr.faint td, tr.faint .rowhead {{ opacity: 0.45; }}
 </style></head><body>
 {body}
 </body></html>"""

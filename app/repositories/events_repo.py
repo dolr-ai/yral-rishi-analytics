@@ -29,6 +29,16 @@ _APP_VERSION = (
     "'contexts_com_snowplowanalytics_mobile_application_1', 1, 'version')"
 )
 
+# Influencer/bot id carried on the chat events. CONFIRM against live data — the
+# brief said it's in se_property / se_label / an ai_chatbot context; I default
+# to a coalesce of se_label then se_property. If both are empty for the chat
+# events, the per-influencer view says so (so a wrong field is obvious, not a
+# silent blank). One-line change once the real field is confirmed.
+_INFLUENCER = (
+    "coalesce(nullIf(JSONExtractString(event, 'se_label'), ''), "
+    "nullIf(JSONExtractString(event, 'se_property'), ''))"
+)
+
 
 async def _rows(client, sql: str) -> list[tuple]:
     return (await client.query(sql)).result_rows
@@ -136,6 +146,103 @@ async def data_span_days(client) -> float:
         )
     )[0][0]
     return float(val or 0)
+
+
+async def influencer_engagement(client, limit: int = 30) -> list[tuple]:
+    """Per influencer/bot: chats started, messages sent, distinct users — the
+    'which bots create love' view, last 30 days. Empty list = the id field
+    (_INFLUENCER) found nothing → confirm the field."""
+    return await _rows(
+        client,
+        f"""
+        SELECT influencer,
+               countIf(action = 'chat_session_started') AS chats,
+               countIf(action = 'user_message_sent')    AS messages,
+               uniqExact(u) AS users
+        FROM (
+            SELECT {_INFLUENCER} AS influencer, {_USER} AS u,
+                   JSONExtractString(event, 'se_action') AS action
+            FROM {_DB}.raw_events
+            WHERE collector_tstamp >= now() - INTERVAL 30 DAY
+        )
+        WHERE influencer != ''
+          AND action IN ('chat_session_started', 'user_message_sent')
+        GROUP BY influencer ORDER BY messages DESC, chats DESC LIMIT {int(limit)}
+        """,
+    )
+
+
+async def message_depth(client) -> list[tuple]:
+    """Power-user curve: how many users sent 1 / 2-5 / 6-20 / 21+ messages
+    (user_message_sent), all time. Are a few users deeply hooked?"""
+    rows = await _rows(
+        client,
+        f"""
+        SELECT multiIf(c = 1, '1', c <= 5, '2-5', c <= 20, '6-20', '21+') AS bucket,
+               count() AS users
+        FROM (
+            SELECT {_USER} AS u,
+                   countIf(JSONExtractString(event, 'se_action') = 'user_message_sent') AS c
+            FROM {_DB}.raw_events GROUP BY u HAVING c > 0
+        )
+        GROUP BY bucket
+        """,
+    )
+    order = {"1": 0, "2-5": 1, "6-20": 2, "21+": 3}
+    return sorted(rows, key=lambda r: order.get(r[0], 9))
+
+
+async def returning_user_rate(client) -> dict:
+    """Share of users seen on more than one distinct day (a simple, robust
+    'they came back' signal that works even with a few days of data)."""
+    row = (
+        await _rows(
+            client,
+            f"""
+        SELECT countIf(days > 1) AS returning, count() AS total FROM (
+            SELECT {_USER} AS u, uniqExact(toDate(collector_tstamp)) AS days
+            FROM {_DB}.raw_events GROUP BY u
+        )
+        """,
+        )
+    )[0]
+    returning, total = row[0], row[1]
+    return {"rate": (returning / total) if total else None, "n": total}
+
+
+async def event_retention(client, weeks_back: int = 8) -> list[tuple]:
+    """Weekly new-user cohort retention (PostHog-style) on raw_events: cohort =
+    week of a user's FIRST event; cell = users active that week-offset. Returns
+    (cohort_week, cohort_size, week_offset, active_users)."""
+    return await _rows(
+        client,
+        f"""
+        WITH first_seen AS (
+            SELECT {_USER} AS u, toMonday(min(toDate(collector_tstamp))) AS cohort_week
+            FROM {_DB}.raw_events GROUP BY u
+            HAVING cohort_week >= toMonday(now()) - INTERVAL {int(weeks_back)} WEEK
+        ),
+        activity AS (
+            SELECT DISTINCT {_USER} AS u, toMonday(toDate(collector_tstamp)) AS active_week
+            FROM {_DB}.raw_events
+        ),
+        cells AS (
+            SELECT f.cohort_week AS cohort_week,
+                   dateDiff('week', f.cohort_week, a.active_week) AS week_offset,
+                   uniqExact(f.u) AS active_users
+            FROM first_seen f
+            JOIN activity a ON a.u = f.u AND a.active_week >= f.cohort_week
+            GROUP BY cohort_week, week_offset
+        ),
+        sizes AS (
+            SELECT cohort_week, uniqExact(u) AS cohort_size
+            FROM first_seen GROUP BY cohort_week
+        )
+        SELECT s.cohort_week, s.cohort_size, c.week_offset, c.active_users
+        FROM sizes s LEFT JOIN cells c ON c.cohort_week = s.cohort_week
+        ORDER BY s.cohort_week DESC, c.week_offset
+        """,
+    )
 
 
 # ── Funnel (configurable) ────────────────────────────────────────────────
