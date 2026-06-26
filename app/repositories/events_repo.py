@@ -29,14 +29,15 @@ _APP_VERSION = (
     "'contexts_com_snowplowanalytics_mobile_application_1', 1, 'version')"
 )
 
-# Influencer/bot id carried on the chat events. CONFIRM against live data — the
-# brief said it's in se_property / se_label / an ai_chatbot context; I default
-# to a coalesce of se_label then se_property. If both are empty for the chat
-# events, the per-influencer view says so (so a wrong field is obvious, not a
-# silent blank). One-line change once the real field is confirmed.
+# Influencer/bot id + type — confirmed from live data (Rishi 2026-06-26):
+# se_property is itself a JSON blob on the chat events; the id is nested inside.
+# (Same blob also carries chat_session_id, message_type, message_length, source
+# — available for future views.)
 _INFLUENCER = (
-    "coalesce(nullIf(JSONExtractString(event, 'se_label'), ''), "
-    "nullIf(JSONExtractString(event, 'se_property'), ''))"
+    "JSONExtractString(JSONExtractString(event, 'se_property'), 'influencer_id')"
+)
+_INFLUENCER_TYPE = (
+    "JSONExtractString(JSONExtractString(event, 'se_property'), 'influencer_type')"
 )
 
 
@@ -149,19 +150,19 @@ async def data_span_days(client) -> float:
 
 
 async def influencer_engagement(client, limit: int = 30) -> list[tuple]:
-    """Per influencer/bot: chats started, messages sent, distinct users — the
-    'which bots create love' view, last 30 days. Empty list = the id field
+    """Per influencer/bot: type, chats started, messages sent, distinct users —
+    the 'which bots create love' view, last 30 days. Empty list = the id field
     (_INFLUENCER) found nothing → confirm the field."""
     return await _rows(
         client,
         f"""
-        SELECT influencer,
+        SELECT influencer, any(itype) AS influencer_type,
                countIf(action = 'chat_session_started') AS chats,
                countIf(action = 'user_message_sent')    AS messages,
                uniqExact(u) AS users
         FROM (
-            SELECT {_INFLUENCER} AS influencer, {_USER} AS u,
-                   JSONExtractString(event, 'se_action') AS action
+            SELECT {_INFLUENCER} AS influencer, {_INFLUENCER_TYPE} AS itype,
+                   {_USER} AS u, JSONExtractString(event, 'se_action') AS action
             FROM {_DB}.raw_events
             WHERE collector_tstamp >= now() - INTERVAL 30 DAY
         )

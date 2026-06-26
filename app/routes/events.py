@@ -56,17 +56,17 @@ def _funnel_html(funnel: list[dict]) -> str:
 def _influencer_html(influencers: list[tuple]) -> str:
     if not influencers:
         return (
-            "<p class='muted'>No influencer id found on the chat events "
-            "(checked se_label / se_property). Confirm the field, then update "
-            "<code>_INFLUENCER</code> in events_repo.</p>"
+            "<p class='muted'>No influencer id on the chat events in this window "
+            "yet.</p>"
         )
     rows = "".join(
-        f"<tr><td>{i}</td><td>{int(ch)}</td><td>{int(m)}</td><td>{int(u)}</td></tr>"
-        for i, ch, m, u in influencers
+        f"<tr><td>{i}</td><td>{t or '—'}</td><td>{int(ch)}</td>"
+        f"<td>{int(m)}</td><td>{int(u)}</td></tr>"
+        for i, t, ch, m, u in influencers
     )
     return (
-        "<table><thead><tr><th>Influencer</th><th>Chats</th><th>Messages</th>"
-        f"<th>Users</th></tr></thead><tbody>{rows}</tbody></table>"
+        "<table><thead><tr><th>Influencer</th><th>Type</th><th>Chats</th>"
+        f"<th>Messages</th><th>Users</th></tr></thead><tbody>{rows}</tbody></table>"
     )
 
 
