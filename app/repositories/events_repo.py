@@ -231,8 +231,11 @@ async def event_retention(client, weeks_back: int = 8) -> list[tuple]:
             SELECT f.cohort_week AS cohort_week,
                    dateDiff('week', f.cohort_week, a.active_week) AS week_offset,
                    uniqExact(f.u) AS active_users
+            -- CH 24.3 allows ONLY equality in JOIN ON; the >= goes in WHERE.
+            -- (It's always true anyway — cohort_week is the user's first week.)
             FROM first_seen f
-            JOIN activity a ON a.u = f.u AND a.active_week >= f.cohort_week
+            JOIN activity a ON a.u = f.u
+            WHERE a.active_week >= f.cohort_week
             GROUP BY cohort_week, week_offset
         ),
         sizes AS (
