@@ -115,21 +115,29 @@ class BridgeConsumer:
         await self._create()
 
     async def poll(self) -> list[str]:
-        """Return this poll's record values (base64 strings). On a 404 (bridge
-        restart/eviction) recreate WITH backoff and return empty this round; on
-        other transient HTTP errors log and return empty — the loop polls again."""
+        """Return this poll's record values (base64 strings).
+
+        The ONLY (re)create path is _open() at the top — wrapped so a failed
+        create backs off instead of crashing the consume loop. A 404 marks the
+        instance dead so the NEXT poll recreates it (with backoff); a transient
+        non-404 error keeps the instance and just retries — it must NOT trigger
+        a recreate, or an overloaded bridge would be spammed with new instances."""
         if self._base is None:
-            await self._open()
+            try:
+                await self._open()
+            except httpx.HTTPError as exc:
+                logger.warning("bridge (re)connect failed: %s", exc)
+                self._recreate_attempts += 1
+                return []
         try:
             resp = await self._http.get(
                 f"{self._base}/records?timeout={config.KAFKA_POLL_TIMEOUT_MS}",
                 headers={"Accept": _BINARY},
             )
             if resp.status_code == 404:
-                logger.warning("bridge consumer gone (404) — recreating")
+                logger.warning("bridge consumer gone (404) — will recreate")
                 self._base = None
                 self._recreate_attempts += 1
-                await self._open()
                 return []
             resp.raise_for_status()
             self._recreate_attempts = 0  # healthy poll → clear the backoff
