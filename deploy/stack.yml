@@ -93,7 +93,14 @@ services:
       restart_policy:
         condition: any
         delay: 5s
-        max_attempts: 5
+        # max_attempts: 0 = never give up. With max_attempts: 5 and no `window`,
+        # the count is over all time: during the 2026-08-10 reboot the read-only
+        # Postgres replica was "starting up", /healthz 503'd, Swarm killed the
+        # container 5x, hit the cap and STOPPED rescheduling permanently — the
+        # service sat 0/1 for ~8h after the DB had already recovered. Unlimited
+        # restarts + the 5s delay let it self-heal when the dependency returns; a
+        # bad *deploy* is still caught by update_config.failure_action: rollback.
+        max_attempts: 0
       # Roll forward one task at a time; auto-rollback on a failed update so a
       # bad analytics deploy self-heals to the previous task without a human.
       update_config:

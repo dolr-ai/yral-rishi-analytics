@@ -52,7 +52,11 @@ services:
       restart_policy:
         condition: any
         delay: 5s
-        max_attempts: 5
+        # max_attempts: 0 = never give up — self-heal after a dependency (Kafka /
+        # ClickHouse) blip instead of Swarm giving up permanently. Same bug that
+        # stranded the analytics web service on 2026-08-10; see deploy/stack.yml.
+        # This is the ingestion path, so a permanent stall would drop events.
+        max_attempts: 0
       update_config:
         order: start-first
         failure_action: rollback
