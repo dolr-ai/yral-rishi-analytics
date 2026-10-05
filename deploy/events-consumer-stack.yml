@@ -42,9 +42,8 @@ services:
     deploy:
       mode: replicated
       replicas: 1
-      placement:
-        # Co-located with ClickHouse (rishi-6) — the insert path is the hot one.
-        constraints: [node.hostname == rishi-6]
+      # No placement pin since 2026-10-04 (rishi-6 was a Hetzner server, now
+      # closed); the swarm decides where it runs.
       resources:
         # Async I/O-bound; the buffer + Python runtime are the footprint.
         limits:   { cpus: "1.0", memory: 512M }
