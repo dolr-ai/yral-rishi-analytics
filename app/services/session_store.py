@@ -32,6 +32,7 @@ def _client():
     if _master is None and not config.REDIS_SENTINEL_MASTER:
         # One Redis, no Sentinel: connect to it directly.
         from redis.asyncio import Redis
+
         _master = Redis(
             host=config.REDIS_HOST,
             port=config.REDIS_PORT,
