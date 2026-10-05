@@ -1,14 +1,15 @@
 name: deploy-events-consumer
 
 # Injects the Strimzi bridge bearer token (Vault, CI-OIDC-only) as a Swarm
-# secret on rishi-6 so the events-consumer can read it. The token cannot be
+# secret so the events-consumer can read it. Swarm secrets are created on a
+# manager; since 2026-10-04 the swarm is the India one (rishi-6 was Hetzner). The token cannot be
 # fetched outside CI, so this IS the injection path. Manual trigger — the
 # coordinator runs it, then deploys the stack + creates the ClickHouse
 # analytics_consumer user + its DSN secret (deploy/events-consumer-stack.yml).
 #
 # Requires repo secrets (coordinator wires these):
-#   RISHI6_SSH_KEY  — the rishi-hetzner-ci deploy key (rishi-deploy@rishi-6)
-#   RISHI6_HOST     — rishi-6 host/IP
+#   RISHI6_SSH_KEY  — the fleet CI deploy key (authorised for `rishi@` on the managers)
+#   RISHI6_HOST     — a swarm MANAGER's address (historic name; now an India manager)
 # The Vault role/policy + shared-secret grant already exist (see the
 # kafka-probe workflow, which proved this exact vault-action step).
 
@@ -33,14 +34,14 @@ jobs:
           secrets: |
             secret/data/SAIKAT_KAFKA_BRIDGE_BEARER_TOKEN value | KAFKA_TOKEN
 
-      - name: Create kafka_bridge_token Swarm secret on rishi-6
+      - name: Create kafka_bridge_token Swarm secret on a manager
         env:
           SSH_KEY: ${{ secrets.RISHI6_SSH_KEY }}
           SSH_HOST: ${{ secrets.RISHI6_HOST }}
         run: |
           set -euo pipefail
           install -m 600 /dev/stdin "$HOME/ci_key" <<< "$SSH_KEY"
-          SSH="ssh -i $HOME/ci_key -o StrictHostKeyChecking=accept-new rishi-deploy@$SSH_HOST"
+          SSH="ssh -i $HOME/ci_key -o StrictHostKeyChecking=accept-new rishi@$SSH_HOST"
           # Create only if absent — Swarm secrets are immutable; rotation is a
           # versioned-secret swap on the service (coordinator), like the OAuth
           # secret. The token is piped over stdin → never in argv or logs (and
