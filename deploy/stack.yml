@@ -1,7 +1,7 @@
 # ── yral-rishi-analytics — Docker Swarm deploy spec ───────────────────────
 #
-# Read-only internal analytics service. Pinned to rishi-6 (co-located with
-# Langfuse + a Patroni node). Modest resource caps so it can NEVER starve the
+# Read-only internal analytics service. Runs wherever the swarm places it
+# (it was pinned to Hetzner rishi-6 until 2026-10-04). Modest resource caps so it can NEVER starve the
 # box that also hosts the Patroni replica it reads from — isolation is the
 # whole point of this being a separate service.
 #
@@ -37,8 +37,10 @@ services:
       SESSIONS_REFRESH_INTERVAL_SEC: ${SESSIONS_REFRESH_INTERVAL_SEC:-3600}
       SESSIONS_REFRESH_READ_TIMEOUT_SEC: ${SESSIONS_REFRESH_READ_TIMEOUT_SEC:-120}
       SESSIONS_REFRESH_LOOKBACK_MIN: ${SESSIONS_REFRESH_LOOKBACK_MIN:-5}
-      REDIS_HOST: ${REDIS_HOST:-redis-sentinel-rishi-4}
-      REDIS_PORT: ${REDIS_PORT:-26379}
+      # One Redis on the India swarm, no Sentinel (the old one was on rishi-4).
+      REDIS_HOST: ${REDIS_HOST:-redis-primary}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_SENTINEL_MASTER: ${REDIS_SENTINEL_MASTER:-}
       ALLOWED_EMAIL_DOMAIN: ${ALLOWED_EMAIL_DOMAIN:-gobazzinga.io}
       # The OAuth client ID is not sensitive (the matching Client SECRET is the
       # Swarm secret analytics_google_oauth_client_secret, wired only at flip
@@ -74,9 +76,8 @@ services:
     deploy:
       mode: replicated
       replicas: 1
-      placement:
-        # Confirmed syntax from langfuse-stack.yml (chat repo).
-        constraints: [node.hostname == rishi-6]
+      # No placement pin: since 2026-10-04 the swarm decides where it runs
+      # (rishi-6 was a Hetzner server, now closed).
       resources:
         # Sized to rishi-6's live state (8 logical cores / 62G RAM; ~4G used,
         # 0.15 load avg, ~51G free — confirmed via Beszel + docker stats by

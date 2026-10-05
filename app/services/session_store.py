@@ -7,7 +7,7 @@ why sessions live here and not in Postgres. Durable audit lives in Postgres
 (login_audit_repo) — that split mirrors the chat service's "live in Redis,
 durable in Postgres" pattern.
 
-Same Redis Sentinel cluster the chat service uses, reachable from rishi-6.
+Same Redis the chat service uses: `redis-primary` directly, or a Sentinel\ncluster when REDIS_SENTINEL_MASTER is set.
 Connection is lazy — importing this module never touches Redis.
 """
 
@@ -29,6 +29,16 @@ def _client():
     # the chat service's Redis pattern (redis_config.py: master URL, no sentinel
     # auth). Empty password (dev) → no auth.
     global _master
+    if _master is None and not config.REDIS_SENTINEL_MASTER:
+        # One Redis, no Sentinel: connect to it directly.
+        from redis.asyncio import Redis
+        _master = Redis(
+            host=config.REDIS_HOST,
+            port=config.REDIS_PORT,
+            socket_timeout=2.0,
+            decode_responses=True,
+            password=config.REDIS_PASSWORD or None,
+        )
     if _master is None:
         from redis.asyncio.sentinel import Sentinel
 

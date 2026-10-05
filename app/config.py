@@ -78,12 +78,13 @@ SESSIONS_REFRESH_READ_TIMEOUT_SEC = _env_int("SESSIONS_REFRESH_READ_TIMEOUT_SEC"
 SESSIONS_REFRESH_LOOKBACK_MIN = _env_int("SESSIONS_REFRESH_LOOKBACK_MIN", 5)
 
 # Redis — login-session storage only (ephemeral; a blip just forces re-login).
-# Durable audit lives in Postgres (analytics schema), not here. Same Sentinel
-# cluster the chat service uses, reachable from rishi-6.
-REDIS_HOST = _env("REDIS_HOST", "redis-sentinel-rishi-4")
-REDIS_PORT = _env_int("REDIS_PORT", 26379)
-# The real master name on this cluster (not the redis default "mymaster").
-REDIS_SENTINEL_MASTER = _env("REDIS_SENTINEL_MASTER", "yral-v2-redis-primary")
+# Durable audit lives in Postgres (analytics schema), not here. Since the move
+# to the India swarm (2026-10-04) there is one Redis, `redis-primary`, and no
+# Sentinel: the old Sentinel host lived on Hetzner rishi-4. Set
+# REDIS_SENTINEL_MASTER to use a Sentinel cluster again.
+REDIS_HOST = _env("REDIS_HOST", "redis-primary")
+REDIS_PORT = _env_int("REDIS_PORT", 6379)
+REDIS_SENTINEL_MASTER = _env("REDIS_SENTINEL_MASTER", "")
 # This cluster's Redis requires AUTH on both the sentinels and the master.
 # File-first (mounts as /run/secrets/REDIS_PASSWORD). Without it, Google login
 # sessions can't be stored. Empty in dev → no-auth (session_store handles it).
